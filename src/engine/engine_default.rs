@@ -6,6 +6,8 @@ use crate::engine::{Avx2, Ssse3};
 #[cfg(target_arch = "aarch64")]
 use crate::engine::Neon;
 
+use super::Naive;
+
 // ======================================================================
 // DefaultEngine - PUBLIC
 
@@ -46,7 +48,8 @@ impl DefaultEngine {
 					*/
         }
 
-        DefaultEngine(Box::new(NoSimd::new()))
+        //DefaultEngine(Box::new(NoSimd::new()))
+        DefaultEngine(Box::new(Naive::new()))
     }
 }
 
