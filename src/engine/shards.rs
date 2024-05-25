@@ -25,7 +25,7 @@ impl Shards {
     }
 
     pub(crate) fn resize(&mut self, shard_count: usize, shard_bytes: usize) {
-        assert!(shard_bytes > 0 && shard_bytes & 63 == 0);
+        assert!(shard_bytes > 0);
 
         self.shard_count = shard_count;
         self.shard_bytes = shard_bytes;

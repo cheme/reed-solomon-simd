@@ -71,8 +71,8 @@ impl Engine for NoSimd {
     }
 
     fn xor(x: &mut [u8], y: &[u8]) {
-        let x64: &mut [u64] = bytemuck::cast_slice_mut(x);
-        let y64: &[u64] = bytemuck::cast_slice(y);
+        let x64: &mut [u32] = bytemuck::cast_slice_mut(x);
+        let y64: &[u32] = bytemuck::cast_slice(y);
 
         for i in 0..x64.len() {
             x64[i] ^= y64[i];

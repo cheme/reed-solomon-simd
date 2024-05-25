@@ -19,10 +19,14 @@ use reed_solomon_simd::engine::Neon;
 // ======================================================================
 // CONST
 
-const SHARD_BYTES: usize = 1024;
+//const shard_bytes: usize = 1024;
+//const shard_bytes: usize = 64;
+//const shard_bytes: usize = 2048;
 
 // ======================================================================
 // UTIL
+
+const SEED: u8 = 0;
 
 fn generate_shards(shard_count: usize, shard_bytes: usize, seed: u8) -> Vec<Vec<u8>> {
     let mut rng = ChaCha8Rng::from_seed([seed; 32]);
@@ -39,7 +43,24 @@ fn generate_shards(shard_count: usize, shard_bytes: usize, seed: u8) -> Vec<Vec<
 fn benchmarks_main(c: &mut Criterion) {
     let mut group = c.benchmark_group("main");
 
-    for (original_count, recovery_count) in [
+		// (12, 4k, 2)?
+    for (shard_bytes, content_size, recovery_mult) in [
+//			(1<<6, 1 << 16, 2),
+//			(1<<8, 1<< 16, 2),
+//			(1<<10, 1<< 16, 2),
+
+
+			// for 4k min shard appears to b 256bytes
+//ko			(1<<6, 1 << 22, 3),
+				(4, 1024 * 4, 2),
+				//(4, 1 << 4, 2),
+//				(12, 1 << 22, 2),
+
+				(1 << 8, 1 << 22, 2),
+				(1 << 12, 1 << 22, 2),
+				(1 << 18, 1 << 22, 2),
+
+			/*
         // 2^n. original_count == recovery_count
         (32, 32),
         (64, 64),
@@ -65,25 +86,28 @@ fn benchmarks_main(c: &mut Criterion) {
         (16384, 8192),
         (16385, 16385), // 2^n + 1
         (57344, 8192),
+			*/
     ] {
+				let original_count = content_size / shard_bytes;
+				let recovery_count = original_count * recovery_mult;
         if original_count >= 1000 && recovery_count >= 1000 {
             group.sample_size(10);
         } else {
             group.sample_size(100);
         }
 
-        let original = generate_shards(original_count, SHARD_BYTES, 0);
+        let original = generate_shards(original_count, shard_bytes, SEED);
         let recovery =
             reed_solomon_simd::encode(original_count, recovery_count, &original).unwrap();
 
         group.throughput(Throughput::Bytes(
-            ((original_count + recovery_count) * SHARD_BYTES) as u64,
+            ((original_count + recovery_count) * shard_bytes) as u64,
         ));
 
         // ReedSolomonEncoder
 
         let mut encoder =
-            ReedSolomonEncoder::new(original_count, recovery_count, SHARD_BYTES).unwrap();
+            ReedSolomonEncoder::new(original_count, recovery_count, shard_bytes).unwrap();
 
         let id = format!("{}:{}", original_count, recovery_count);
 
@@ -104,7 +128,7 @@ fn benchmarks_main(c: &mut Criterion) {
 
         let max_original_loss_count = std::cmp::min(original_count, recovery_count);
 
-        for loss_percent in [1, 100] {
+        for loss_percent in [1, 25, 50, 75, 100] {
             // We round up to make sure at least one shard is lost for low shard counts.
             // '+ 99' as div_ceil() is not in stable yet (int_roundings #88581).
             let original_loss_count = (max_original_loss_count * loss_percent + 99) / 100;
@@ -112,7 +136,7 @@ fn benchmarks_main(c: &mut Criterion) {
             let recovery_provided_count = original_loss_count;
 
             let mut decoder =
-                ReedSolomonDecoder::new(original_count, recovery_count, SHARD_BYTES).unwrap();
+                ReedSolomonDecoder::new(original_count, recovery_count, shard_bytes).unwrap();
 
             let id = format!("{}:{} ({}%)", original_count, recovery_count, loss_percent);
 
@@ -136,7 +160,7 @@ fn benchmarks_main(c: &mut Criterion) {
 
     group.finish();
 }
-
+/*
 // ======================================================================
 // BENCHMARKS - RATE
 
@@ -160,12 +184,12 @@ fn benchmarks_rate_one<E: Engine>(c: &mut Criterion, name: &str, new_engine: fn(
         (2048, 1025),
         (2048, 2048),
     ] {
-        let original = generate_shards(original_count, SHARD_BYTES, 0);
+        let original = generate_shards(original_count, shard_bytes, 0);
         let recovery =
             reed_solomon_simd::encode(original_count, recovery_count, &original).unwrap();
 
         group.throughput(Throughput::Bytes(
-            ((original_count + recovery_count) * SHARD_BYTES) as u64,
+            ((original_count + recovery_count) * shard_bytes) as u64,
         ));
 
         // ENCODE
@@ -177,7 +201,7 @@ fn benchmarks_rate_one<E: Engine>(c: &mut Criterion, name: &str, new_engine: fn(
         let mut encoder = HighRateEncoder::new(
             original_count,
             recovery_count,
-            SHARD_BYTES,
+            shard_bytes,
             new_engine(),
             None,
         )
@@ -201,7 +225,7 @@ fn benchmarks_rate_one<E: Engine>(c: &mut Criterion, name: &str, new_engine: fn(
         let mut encoder = LowRateEncoder::new(
             original_count,
             recovery_count,
-            SHARD_BYTES,
+            shard_bytes,
             new_engine(),
             None,
         )
@@ -231,7 +255,7 @@ fn benchmarks_rate_one<E: Engine>(c: &mut Criterion, name: &str, new_engine: fn(
         let mut decoder = HighRateDecoder::new(
             original_count,
             recovery_count,
-            SHARD_BYTES,
+            shard_bytes,
             new_engine(),
             None,
         )
@@ -260,7 +284,7 @@ fn benchmarks_rate_one<E: Engine>(c: &mut Criterion, name: &str, new_engine: fn(
         let mut decoder = LowRateDecoder::new(
             original_count,
             recovery_count,
-            SHARD_BYTES,
+            shard_bytes,
             new_engine(),
             None,
         )
@@ -318,8 +342,8 @@ fn benchmarks_engine_one<E: Engine>(c: &mut Criterion, name: &str, engine: E) {
 
     // XOR MUL
 
-    let mut x = &mut generate_shards(1, SHARD_BYTES, 0)[0];
-    let y = &generate_shards(1, SHARD_BYTES, 1)[0];
+    let mut x = &mut generate_shards(1, shard_bytes, 0)[0];
+    let y = &generate_shards(1, shard_bytes, 1)[0];
 
     group.bench_function("xor", |b| {
         b.iter(|| E::xor(black_box(&mut x), black_box(&y)))
@@ -331,8 +355,8 @@ fn benchmarks_engine_one<E: Engine>(c: &mut Criterion, name: &str, engine: E) {
 
     // XOR_WITHIN
 
-    let shards_256_data = &mut generate_shards(1, 256 * SHARD_BYTES, 0)[0];
-    let mut shards_256 = ShardsRefMut::new(256, SHARD_BYTES, shards_256_data.as_mut());
+    let shards_256_data = &mut generate_shards(1, 256 * shard_bytes, 0)[0];
+    let mut shards_256 = ShardsRefMut::new(256, shard_bytes, shards_256_data.as_mut());
 
     group.bench_function("xor_within 128*2", |b| {
         b.iter(|| {
@@ -347,8 +371,8 @@ fn benchmarks_engine_one<E: Engine>(c: &mut Criterion, name: &str, engine: E) {
 
     // FORMAL DERIVATIVE
 
-    let shards_128_data = &mut generate_shards(1, 128 * SHARD_BYTES, 0)[0];
-    let mut shards_128 = ShardsRefMut::new(128, SHARD_BYTES, shards_128_data.as_mut());
+    let shards_128_data = &mut generate_shards(1, 128 * shard_bytes, 0)[0];
+    let mut shards_128 = ShardsRefMut::new(128, shard_bytes, shards_128_data.as_mut());
 
     group.bench_function("formal_derivative 128", |b| {
         b.iter(|| E::formal_derivative(black_box(&mut shards_128)))
@@ -382,11 +406,13 @@ fn benchmarks_engine_one<E: Engine>(c: &mut Criterion, name: &str, engine: E) {
 
     group.finish();
 }
+*/
 
 // ======================================================================
 // MAIN
 
 criterion_group!(benches_main, benchmarks_main);
-criterion_group!(benches_rate, benchmarks_rate);
-criterion_group!(benches_engine, benchmarks_engine);
-criterion_main!(benches_main, benches_rate, benches_engine);
+//criterion_group!(benches_rate, benchmarks_rate);
+//criterion_group!(benches_engine, benchmarks_engine);
+//criterion_main!(benches_main, benches_rate, benches_engine);
+criterion_main!(benches_main);
