@@ -118,7 +118,6 @@ impl Engine for Naive {
 
     fn xor(x: &mut [u8], y: &[u8]) {
         let shard_bytes = x.len();
-        debug_assert!(shard_bytes & 63 == 0);
         debug_assert_eq!(shard_bytes, y.len());
 
         for i in 0..shard_bytes {
@@ -143,7 +142,6 @@ impl Naive {
     /// `x[] ^= y[] * log_m`
     fn mul_add(&self, x: &mut [u8], y: &[u8], log_m: GfElement) {
         let shard_bytes = x.len();
-        debug_assert!(shard_bytes & 63 == 0);
         debug_assert_eq!(shard_bytes, y.len());
 
         let mut pos = 0;
