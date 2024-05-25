@@ -102,7 +102,6 @@ impl Engine for Naive {
 
     fn mul(&self, x: &mut [u8], log_m: GfElement) {
         let shard_bytes = x.len();
-        debug_assert!(shard_bytes & 63 == 0);
 
         let mut pos = 0;
         while pos < shard_bytes {
