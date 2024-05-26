@@ -8,8 +8,14 @@ I'll just document some parts which I do understand.
 - Reed-Solomon `GF(2^16)` erasure coding works on 16-bit elements ([`GfElement`]).
 - A **shard** is a byte-array which is interpreted as an array of [`GfElement`]:s.
 
+Note that what is currently use for 4byte is 
+[ low_0, low_1, high_0, high_1] that does not really allow the simd optim
+TODO should we switch to the more natural
+[ low_0, high_0, low 1, high 1]? (TODO check crates compat)
+
 A naive implementation could e.g. require shards to be a multiple of **2 bytes**
 and then interpret each byte-pair as low/high parts of a single [`GfElement`]:
+
 
 ```text
 [ low_0, high_0, low_1, high_1, ...]

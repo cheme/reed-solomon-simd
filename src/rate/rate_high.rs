@@ -209,7 +209,15 @@ impl<E: Engine> RateDecoder<E> for HighRateDecoder<E> {
 
         for i in 0..recovery_count {
             if received[i] {
-                self.engine.mul(&mut work[i], erasures[i]);
+							// TODO for 4b should be possible to batch for consecutive i here
+							// -> on 8byte for u64 variant.
+							// -> on 32byte for sse3 variant.
+							// -> on 64byte for avx2 variant.
+							// same thing apply on most engine.mul.
+							//
+							// But the backend need to use different high low byte ordering which
+							// may make optim not sensible (see readme).
+              self.engine.mul(&mut work[i], erasures[i]);
             } else {
                 work[i].fill(0);
             }
