@@ -105,14 +105,14 @@ impl Engine for Naive {
 
         let mut pos = 0;
         while pos < shard_bytes {
-            for i in 0..32 {
+            for i in 0..2 {
                 let lo = x[pos + i] as GfElement;
-                let hi = x[pos + i + 32] as GfElement;
+                let hi = x[pos + i + 2] as GfElement;
                 let prod = tables::mul(lo | (hi << 8), log_m, self.exp, self.log);
                 x[pos + i] = prod as u8;
-                x[pos + i + 32] = (prod >> 8) as u8;
+                x[pos + i + 2] = (prod >> 8) as u8;
             }
-            pos += 64;
+            pos += 4;
         }
     }
 
@@ -146,14 +146,14 @@ impl Naive {
 
         let mut pos = 0;
         while pos < shard_bytes {
-            for i in 0..32 {
+            for i in 0..2 {
                 let lo = y[pos + i] as GfElement;
-                let hi = y[pos + i + 32] as GfElement;
+                let hi = y[pos + i + 2] as GfElement;
                 let prod = tables::mul(lo | (hi << 8), log_m, self.exp, self.log);
                 x[pos + i] ^= prod as u8;
-                x[pos + i + 32] ^= (prod >> 8) as u8;
+                x[pos + i + 2] ^= (prod >> 8) as u8;
             }
-            pos += 64;
+            pos += 4;
         }
     }
 }

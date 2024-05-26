@@ -118,6 +118,7 @@ pub(crate) fn eval_poly(erasures: &mut [GfElement; GF_ORDER], truncated_size: us
     fwht::fwht(erasures, truncated_size);
 
     for (e, factor) in std::iter::zip(erasures.iter_mut(), log_walsh.iter()) {
+			// TODO 4b limit? likely ok.
         let product = u32::from(*e) * u32::from(*factor);
         *e = add_mod(product as GfElement, (product >> GF_BITS) as GfElement);
     }
