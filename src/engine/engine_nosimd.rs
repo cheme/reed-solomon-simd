@@ -59,14 +59,14 @@ impl Engine for NoSimd {
 
         let mut pos = 0;
         while pos < x.len() {
-            for i in 0..32 {
+            for i in 0..2 {
                 let lo = x[pos + i] as usize;
-                let hi = x[pos + i + 32] as usize;
+                let hi = x[pos + i + 2] as usize;
                 let prod = lut[0][lo & 15] ^ lut[1][lo >> 4] ^ lut[2][hi & 15] ^ lut[3][hi >> 4];
                 x[pos + i] = prod as u8;
-                x[pos + i + 32] = (prod >> 8) as u8;
+                x[pos + i + 2] = (prod >> 8) as u8;
             }
-            pos += 64;
+            pos += 4;
         }
     }
 
@@ -99,14 +99,14 @@ impl NoSimd {
 
         let mut pos = 0;
         while pos < x.len() {
-            for i in 0..32 {
+            for i in 0..2 {
                 let lo = y[pos + i] as usize;
-                let hi = y[pos + i + 32] as usize;
+                let hi = y[pos + i + 2] as usize;
                 let prod = lut[0][lo & 15] ^ lut[1][lo >> 4] ^ lut[2][hi & 15] ^ lut[3][hi >> 4];
                 x[pos + i] ^= prod as u8;
-                x[pos + i + 32] ^= (prod >> 8) as u8;
+                x[pos + i + 2] ^= (prod >> 8) as u8;
             }
-            pos += 64;
+            pos += 4;
         }
     }
 }

@@ -48,8 +48,8 @@ impl DefaultEngine {
 					*/
         }
 
-        //DefaultEngine(Box::new(NoSimd::new()))
-        DefaultEngine(Box::new(Naive::new()))
+        DefaultEngine(Box::new(NoSimd::new()))
+        //DefaultEngine(Box::new(Naive::new()))
     }
 }
 
