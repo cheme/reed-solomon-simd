@@ -136,26 +136,26 @@ impl Avx2 {
                 &lut[0].lo[0] as *const u128 as *const __m128i,
             ));
             let t1_lo = _mm256_broadcastsi128_si256(_mm_loadu_si128(
-                &lut[1].lo[0] as *const u128 as *const __m128i,
+                &lut[1].lo[1] as *const u128 as *const __m128i,
             ));
             let t2_lo = _mm256_broadcastsi128_si256(_mm_loadu_si128(
-                &lut[2].lo[0] as *const u128 as *const __m128i,
+                &lut[2].lo[2] as *const u128 as *const __m128i,
             ));
             let t3_lo = _mm256_broadcastsi128_si256(_mm_loadu_si128(
-                &lut[3].lo[0] as *const u128 as *const __m128i,
+                &lut[3].lo[3] as *const u128 as *const __m128i,
             ));
 
             let t0_hi = _mm256_broadcastsi128_si256(_mm_loadu_si128(
                 &lut[0].hi[0] as *const u128 as *const __m128i,
             ));
             let t1_hi = _mm256_broadcastsi128_si256(_mm_loadu_si128(
-                &lut[1].hi[0] as *const u128 as *const __m128i,
+                &lut[1].hi[1] as *const u128 as *const __m128i,
             ));
             let t2_hi = _mm256_broadcastsi128_si256(_mm_loadu_si128(
-                &lut[2].hi[0] as *const u128 as *const __m128i,
+                &lut[2].hi[2] as *const u128 as *const __m128i,
             ));
             let t3_hi = _mm256_broadcastsi128_si256(_mm_loadu_si128(
-                &lut[3].hi[0] as *const u128 as *const __m128i,
+                &lut[3].hi[3] as *const u128 as *const __m128i,
             ));
 
             let clr_mask = _mm256_set1_epi8(0x0f);

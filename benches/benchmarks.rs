@@ -77,6 +77,22 @@ fn benchmarks_main(c: &mut Criterion) {
         let recovery =
             reed_solomon_simd::encode(original_count, recovery_count, &original).unwrap();
 
+
+				let mut decoder =
+                ReedSolomonDecoder::new(original_count, recovery_count, SHARD_BYTES).unwrap();
+                        for index in 0..16 {
+													println!(":{:?}", original[index]);
+                        }
+                        for index in 0..16 {
+                            decoder.add_recovery_shard(index, &recovery[index]).unwrap();
+                        }
+                        let r = decoder.decode().unwrap();
+												for i in 0..16 {
+													println!("{:?}", r.restored_original(i));
+												}
+												panic!("i");
+
+
         group.throughput(Throughput::Bytes(
             ((original_count + recovery_count) * SHARD_BYTES) as u64,
         ));
@@ -117,7 +133,8 @@ fn benchmarks_main(c: &mut Criterion) {
 
             let id = format!("{}:{} ({}%)", original_count, recovery_count, loss_percent);
 
-            group.bench_with_input(
+
+                        group.bench_with_input(
                 BenchmarkId::new("ReedSolomonDecoder", &id),
                 &recovery,
                 |b, recovery| {
