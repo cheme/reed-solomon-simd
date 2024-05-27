@@ -69,7 +69,7 @@ impl Engine for Avx2 {
         }
     }
 
-    fn mul(&self, x: &mut [u8], log_m: GfElement) {
+    fn mul(&self, x: &mut [u8], log_m: [GfElement; 4]) {
         unsafe {
             self.mul_avx2(x, log_m);
         }
@@ -105,8 +105,13 @@ impl Default for Avx2 {
 
 impl Avx2 {
     #[target_feature(enable = "avx2")]
-    unsafe fn mul_avx2(&self, x: &mut [u8], log_m: GfElement) {
-        let lut = &self.mul128[log_m as usize];
+    unsafe fn mul_avx2(&self, x: &mut [u8], log_m: [GfElement; 4]) {
+        let lut = [
+					&self.mul128[log_m[0] as usize],
+					&self.mul128[log_m[1] as usize],
+					&self.mul128[log_m[2] as usize],
+					&self.mul128[log_m[3] as usize],
+				];
 
         for chunk in x.chunks_exact_mut(64) {
             let x_ptr = chunk.as_mut_ptr() as *mut __m256i;
@@ -122,35 +127,35 @@ impl Avx2 {
 
     // Impelemntation of LEO_MUL_256
     #[inline(always)]
-    fn mul_256(value_lo: __m256i, value_hi: __m256i, lut: &Multiply128lutT) -> (__m256i, __m256i) {
+    fn mul_256(value_lo: __m256i, value_hi: __m256i, lut: [&Multiply128lutT; 4]) -> (__m256i, __m256i) {
         let mut prod_lo: __m256i;
         let mut prod_hi: __m256i;
 
         unsafe {
             let t0_lo = _mm256_broadcastsi128_si256(_mm_loadu_si128(
-                &lut.lo[0] as *const u128 as *const __m128i,
+                &lut[0].lo[0] as *const u128 as *const __m128i,
             ));
             let t1_lo = _mm256_broadcastsi128_si256(_mm_loadu_si128(
-                &lut.lo[1] as *const u128 as *const __m128i,
+                &lut[1].lo[0] as *const u128 as *const __m128i,
             ));
             let t2_lo = _mm256_broadcastsi128_si256(_mm_loadu_si128(
-                &lut.lo[2] as *const u128 as *const __m128i,
+                &lut[2].lo[0] as *const u128 as *const __m128i,
             ));
             let t3_lo = _mm256_broadcastsi128_si256(_mm_loadu_si128(
-                &lut.lo[3] as *const u128 as *const __m128i,
+                &lut[3].lo[0] as *const u128 as *const __m128i,
             ));
 
             let t0_hi = _mm256_broadcastsi128_si256(_mm_loadu_si128(
-                &lut.hi[0] as *const u128 as *const __m128i,
+                &lut[0].hi[0] as *const u128 as *const __m128i,
             ));
             let t1_hi = _mm256_broadcastsi128_si256(_mm_loadu_si128(
-                &lut.hi[1] as *const u128 as *const __m128i,
+                &lut[1].hi[0] as *const u128 as *const __m128i,
             ));
             let t2_hi = _mm256_broadcastsi128_si256(_mm_loadu_si128(
-                &lut.hi[2] as *const u128 as *const __m128i,
+                &lut[2].hi[0] as *const u128 as *const __m128i,
             ));
             let t3_hi = _mm256_broadcastsi128_si256(_mm_loadu_si128(
-                &lut.hi[3] as *const u128 as *const __m128i,
+                &lut[3].hi[0] as *const u128 as *const __m128i,
             ));
 
             let clr_mask = _mm256_set1_epi8(0x0f);
@@ -183,7 +188,7 @@ impl Avx2 {
         mut x_hi: __m256i,
         y_lo: __m256i,
         y_hi: __m256i,
-        lut: &Multiply128lutT,
+        lut: [&Multiply128lutT; 4],
     ) -> (__m256i, __m256i) {
         let (prod_lo, prod_hi) = Self::mul_256(y_lo, y_hi, lut);
         unsafe {
@@ -200,8 +205,13 @@ impl Avx2 {
 impl Avx2 {
     // Implementation of LEO_FFTB_256
     #[inline(always)]
-    fn fftb_256(&self, x: &mut [u8; 64], y: &mut [u8; 64], log_m: GfElement) {
-        let lut = &self.mul128[log_m as usize];
+    fn fftb_256(&self, x: &mut [u8; 64], y: &mut [u8; 64], log_m: [GfElement; 4]) {
+        let lut = [
+					&self.mul128[log_m[0] as usize],
+					&self.mul128[log_m[1] as usize],
+					&self.mul128[log_m[2] as usize],
+					&self.mul128[log_m[3] as usize],
+				];
         let x_ptr = x.as_mut_ptr() as *mut __m256i;
         let y_ptr = y.as_mut_ptr() as *mut __m256i;
         unsafe {
@@ -226,7 +236,7 @@ impl Avx2 {
 
     // Partial butterfly, caller must do `GF_MODULUS` check with `xor`.
     #[inline(always)]
-    fn fft_butterfly_partial(&self, x: &mut [u8], y: &mut [u8], log_m: GfElement) {
+    fn fft_butterfly_partial(&self, x: &mut [u8], y: &mut [u8], log_m: [GfElement; 4]) {
         // While we wait for array_chunks/slice_as_chunks (#74985) to become stable,
         // we have to try_into().unwrap() (which cannot fail in this case)
         for (x_chunk, y_chunk) in zip(x.chunks_exact_mut(64), y.chunks_exact_mut(64)) {
@@ -244,15 +254,16 @@ impl Avx2 {
         data: &mut ShardsRefMut,
         pos: usize,
         dist: usize,
-        log_m01: GfElement,
-        log_m23: GfElement,
-        log_m02: GfElement,
+        log_m01: [GfElement; 4],
+        log_m23: [GfElement; 4],
+        log_m02: [GfElement; 4],
     ) {
         let (s0, s1, s2, s3) = data.dist4_mut(pos, dist);
 
+				let i=3; // TODO not sure about this: need probbly to check all i before running fft
         // FIRST LAYER
 
-        if log_m02 == GF_MODULUS {
+        if log_m02[i] == GF_MODULUS {
             Self::xor(s2, s0);
             Self::xor(s3, s1);
         } else {
@@ -262,13 +273,13 @@ impl Avx2 {
 
         // SECOND LAYER
 
-        if log_m01 == GF_MODULUS {
+        if log_m01[i] == GF_MODULUS {
             Self::xor(s1, s0);
         } else {
             self.fft_butterfly_partial(s0, s1, log_m01);
         }
 
-        if log_m23 == GF_MODULUS {
+        if log_m23[i] == GF_MODULUS {
             Self::xor(s3, s2);
         } else {
             self.fft_butterfly_partial(s2, s3, log_m23);
@@ -304,12 +315,26 @@ impl Avx2 {
         while dist != 0 {
             let mut r = 0;
             while r < truncated_size {
-                let base = r + dist + skew_delta - 1;
+                let base = (r + dist + skew_delta - 1) * 4;
 
-                let log_m01 = self.skew[base];
-                let log_m02 = self.skew[base + dist];
-                let log_m23 = self.skew[base + dist * 2];
-
+                let log_m01 = [
+									self.skew[base],
+									self.skew[base + 1],
+									self.skew[base + 2],
+									self.skew[base + 3],
+								];
+                let log_m02 = [
+									self.skew[base + dist],
+									self.skew[base + dist+ 1],
+									self.skew[base + dist+ 2],
+									self.skew[base + dist+ 3],
+								];
+                let log_m23 = [
+									self.skew[base + dist * 2],
+									self.skew[base + dist * 2+ 1],
+									self.skew[base + dist * 2+ 2],
+									self.skew[base + dist * 2+ 3],
+								];
                 for i in r..r + dist {
                     self.fft_butterfly_two_layers(data, pos + i, dist, log_m01, log_m23, log_m02)
                 }
@@ -322,21 +347,8 @@ impl Avx2 {
 
         // FINAL ODD LAYER
 
-        if dist4 == 2 {
-            let mut r = 0;
-            while r < truncated_size {
-                let log_m = self.skew[r + skew_delta];
-
-                let (x, y) = data.dist2_mut(pos + r, 1);
-
-                if log_m == GF_MODULUS {
-                    Self::xor(y, x);
-                } else {
-                    self.fft_butterfly_partial(x, y, log_m)
-                }
-
-                r += 2;
-            }
+        if dist4 == 2 * 4 {
+					unimplemented!("test on aligned");
         }
     }
 }
@@ -347,8 +359,13 @@ impl Avx2 {
 impl Avx2 {
     // Implementation of LEO_IFFTB_256
     #[inline(always)]
-    fn ifftb_256(&self, x: &mut [u8; 64], y: &mut [u8; 64], log_m: GfElement) {
-        let lut = &self.mul128[log_m as usize];
+    fn ifftb_256(&self, x: &mut [u8; 64], y: &mut [u8; 64], log_m: [GfElement; 4]) {
+        let lut = [
+					&self.mul128[log_m[0] as usize],
+					&self.mul128[log_m[1] as usize],
+					&self.mul128[log_m[2] as usize],
+					&self.mul128[log_m[3] as usize],
+				];
         let x_ptr = x.as_mut_ptr() as *mut __m256i;
         let y_ptr = y.as_mut_ptr() as *mut __m256i;
 
@@ -373,7 +390,7 @@ impl Avx2 {
     }
 
     #[inline(always)]
-    fn ifft_butterfly_partial(&self, x: &mut [u8], y: &mut [u8], log_m: GfElement) {
+    fn ifft_butterfly_partial(&self, x: &mut [u8], y: &mut [u8], log_m: [GfElement; 4]) {
         // While we wait for array_chunks/slice_as_chunks (#74985) to become stable,
         // we'll have to try_into() to array
         for (x_chunk, y_chunk) in zip(x.chunks_exact_mut(64), y.chunks_exact_mut(64)) {
@@ -391,21 +408,22 @@ impl Avx2 {
         data: &mut ShardsRefMut,
         pos: usize,
         dist: usize,
-        log_m01: GfElement,
-        log_m23: GfElement,
-        log_m02: GfElement,
+        log_m01: [GfElement; 4],
+        log_m23: [GfElement; 4],
+        log_m02: [GfElement; 4],
     ) {
         let (s0, s1, s2, s3) = data.dist4_mut(pos, dist);
 
+				let i = 3; // TODO not sure about this: need probbly to check all i before running ifft
         // FIRST LAYER
 
-        if log_m01 == GF_MODULUS {
+        if log_m01[i] == GF_MODULUS {
             Self::xor(s1, s0);
         } else {
             self.ifft_butterfly_partial(s0, s1, log_m01);
         }
 
-        if log_m23 == GF_MODULUS {
+        if log_m23[i] == GF_MODULUS {
             Self::xor(s3, s2);
         } else {
             self.ifft_butterfly_partial(s2, s3, log_m23);
@@ -413,7 +431,7 @@ impl Avx2 {
 
         // SECOND LAYER
 
-        if log_m02 == GF_MODULUS {
+        if log_m02[i] == GF_MODULUS {
             Self::xor(s2, s0);
             Self::xor(s3, s1);
         } else {
@@ -451,11 +469,26 @@ impl Avx2 {
         while dist4 <= size {
             let mut r = 0;
             while r < truncated_size {
-                let base = r + dist + skew_delta - 1;
+                let base = (r + dist + skew_delta - 1) * 4;
 
-                let log_m01 = self.skew[base];
-                let log_m02 = self.skew[base + dist];
-                let log_m23 = self.skew[base + dist * 2];
+                let log_m01 = [
+									self.skew[base],
+									self.skew[base + 1],
+									self.skew[base + 2],
+									self.skew[base + 3],
+								];
+                let log_m02 = [
+									self.skew[base + dist],
+									self.skew[base + dist + 1],
+									self.skew[base + dist + 2],
+									self.skew[base + dist + 3],
+								];
+                let log_m23 = [
+									self.skew[base + dist * 2],
+									self.skew[base + dist * 2 + 1],
+									self.skew[base + dist * 2 + 2],
+									self.skew[base + dist * 2 + 3],
+								];
 
                 for i in r..r + dist {
                     self.ifft_butterfly_two_layers(data, pos + i, dist, log_m01, log_m23, log_m02)
@@ -470,19 +503,7 @@ impl Avx2 {
         // FINAL ODD LAYER
 
         if dist < size {
-            let log_m = self.skew[dist + skew_delta - 1];
-            if log_m == GF_MODULUS {
-                Self::xor_within(data, pos + dist, pos, dist);
-            } else {
-                let (mut a, mut b) = data.split_at_mut(pos + dist);
-                for i in 0..dist {
-                    self.ifft_butterfly_partial(
-                        &mut a[pos + i], // data[pos + i]
-                        &mut b[i],       // data[pos + i + dist]
-                        log_m,
-                    );
-                }
-            }
+					unimplemented!("test on aligned");
         }
     }
 }

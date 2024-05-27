@@ -182,19 +182,19 @@ impl<E: Engine> RateDecoder<E> for LowRateDecoder<E> {
 
         let mut erasures = [0; GF_ORDER];
 
-        for i in 0..original_count {
-            if !received[i] {
+        for i in 0..original_count * 4 {
+            if !received[i / 4] {
                 erasures[i] = 1;
             }
         }
 
-        for i in chunk_size..recovery_end {
-            if !received[i] {
+        for i in chunk_size * 4..recovery_end * 4 {
+            if !received[i / 4] {
                 erasures[i] = 1;
             }
         }
 
-        erasures[recovery_end..].fill(1);
+        erasures[recovery_end * 4..].fill(1);
 
         // EVALUATE POLYNOMIAL
 
@@ -209,7 +209,12 @@ impl<E: Engine> RateDecoder<E> for LowRateDecoder<E> {
 
         for i in 0..original_count {
             if received[i] {
-                self.engine.mul(&mut work[i], erasures[i]);
+                self.engine.mul(&mut work[i], [
+									erasures[i * 4],
+									erasures[i * 4 + 1],
+									erasures[i * 4 + 2],
+									erasures[i * 4 + 3],
+								]);
             } else {
                 work[i].fill(0);
             }
@@ -219,7 +224,12 @@ impl<E: Engine> RateDecoder<E> for LowRateDecoder<E> {
 
         for i in chunk_size..recovery_end {
             if received[i] {
-                self.engine.mul(&mut work[i], erasures[i]);
+                self.engine.mul(&mut work[i], [
+									erasures[i * 4],
+									erasures[i * 4 + 1],
+									erasures[i * 4 + 2],
+									erasures[i * 4 + 3],
+								]);
             } else {
                 work[i].fill(0);
             }
@@ -237,7 +247,12 @@ impl<E: Engine> RateDecoder<E> for LowRateDecoder<E> {
 
         for i in 0..original_count {
             if !received[i] {
-                self.engine.mul(&mut work[i], GF_MODULUS - erasures[i]);
+                self.engine.mul(&mut work[i], [
+									GF_MODULUS - erasures[i * 4],
+									GF_MODULUS - erasures[i * 4 + 1],
+									GF_MODULUS - erasures[i * 4 + 2],
+									GF_MODULUS - erasures[i * 4 + 3],
+								]);
             }
         }
 

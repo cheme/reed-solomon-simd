@@ -1,7 +1,8 @@
-use crate::engine::{Engine, GfElement, NoSimd, ShardsRefMut, GF_ORDER};
+use crate::engine::{Engine, GfElement, ShardsRefMut, GF_ORDER};
+//use crate::engine::{Engine, GfElement, NoSimd, ShardsRefMut, GF_ORDER};
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-use crate::engine::{Avx2, Ssse3};
+use crate::engine::{Avx2};
 
 #[cfg(target_arch = "aarch64")]
 use crate::engine::Neon;
@@ -24,6 +25,8 @@ impl DefaultEngine {
     /// 1. [`Neon`]
     /// 2. [`NoSimd`]
     pub fn new() -> Self {
+                return DefaultEngine(Box::new(Avx2::new()));
+								/*
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if is_x86_feature_detected!("avx2") {
@@ -43,6 +46,7 @@ impl DefaultEngine {
         }
 
         DefaultEngine(Box::new(NoSimd::new()))
+								*/
     }
 }
 
@@ -81,11 +85,13 @@ impl Engine for DefaultEngine {
         self.0.ifft(data, pos, size, truncated_size, skew_delta)
     }
 
-    fn mul(&self, x: &mut [u8], log_m: GfElement) {
+    fn mul(&self, x: &mut [u8], log_m: [GfElement; 4]) {
         self.0.mul(x, log_m)
     }
 
     fn xor(x: &mut [u8], y: &[u8]) {
+                return Avx2::xor(x, y);
+								/*
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if is_x86_feature_detected!("avx2") {
@@ -105,9 +111,12 @@ impl Engine for DefaultEngine {
         }
 
         NoSimd::xor(x, y)
+								*/
     }
 
     fn eval_poly(erasures: &mut [GfElement; GF_ORDER], truncated_size: usize) {
+                return Avx2::eval_poly(erasures, truncated_size);
+								/*
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if is_x86_feature_detected!("avx2") {
@@ -127,5 +136,6 @@ impl Engine for DefaultEngine {
         }
 
         NoSimd::eval_poly(erasures, truncated_size)
+								*/
     }
 }

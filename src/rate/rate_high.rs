@@ -182,23 +182,23 @@ impl<E: Engine> RateDecoder<E> for HighRateDecoder<E> {
 
         let mut erasures = [0; GF_ORDER];
 
-        for i in 0..recovery_count {
-            if !received[i] {
+        for i in 0..recovery_count * 4 {
+            if !received[i / 4] {
                 erasures[i] = 1;
             }
         }
 
-        erasures[recovery_count..chunk_size].fill(1);
+        erasures[recovery_count * 4..chunk_size * 4].fill(1);
 
-        for i in chunk_size..original_end {
-            if !received[i] {
+        for i in chunk_size * 4..original_end * 4 {
+            if !received[i / 4] {
                 erasures[i] = 1;
             }
         }
 
         // EVALUATE POLYNOMIAL
 
-        E::eval_poly(&mut erasures, original_end);
+        E::eval_poly(&mut erasures, original_end * 4);
 
         // MULTIPLY SHARDS
 
@@ -209,7 +209,12 @@ impl<E: Engine> RateDecoder<E> for HighRateDecoder<E> {
 
         for i in 0..recovery_count {
             if received[i] {
-                self.engine.mul(&mut work[i], erasures[i]);
+                self.engine.mul(&mut work[i], [
+									erasures[i * 4],
+									erasures[i * 4 + 1],
+									erasures[i * 4 + 2],
+									erasures[i * 4 + 3],
+								]);
             } else {
                 work[i].fill(0);
             }
@@ -219,7 +224,12 @@ impl<E: Engine> RateDecoder<E> for HighRateDecoder<E> {
 
         for i in chunk_size..original_end {
             if received[i] {
-                self.engine.mul(&mut work[i], erasures[i]);
+                self.engine.mul(&mut work[i], [
+									erasures[i * 4],
+									erasures[i * 4 + 1],
+									erasures[i * 4 + 2],
+									erasures[i * 4 + 3],
+								]);
             } else {
                 work[i].fill(0);
             }
@@ -237,7 +247,12 @@ impl<E: Engine> RateDecoder<E> for HighRateDecoder<E> {
 
         for i in chunk_size..original_end {
             if !received[i] {
-                self.engine.mul(&mut work[i], GF_MODULUS - erasures[i]);
+                self.engine.mul(&mut work[i], [
+									GF_MODULUS - erasures[i * 4],
+									GF_MODULUS - erasures[i * 4 + 1],
+									GF_MODULUS - erasures[i * 4 + 2],
+									GF_MODULUS - erasures[i * 4 + 3],
+								]);
             }
         }
 

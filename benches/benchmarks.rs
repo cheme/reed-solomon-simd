@@ -3,15 +3,13 @@ use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 
 use reed_solomon_simd::{
-    engine::{DefaultEngine, Engine, Naive, NoSimd, ShardsRefMut},
+    engine::{DefaultEngine, Engine, ShardsRefMut},
     rate::{
         HighRateDecoder, HighRateEncoder, LowRateDecoder, LowRateEncoder, RateDecoder, RateEncoder,
     },
     ReedSolomonDecoder, ReedSolomonEncoder,
 };
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-use reed_solomon_simd::engine::{Avx2, Ssse3};
 
 #[cfg(target_arch = "aarch64")]
 use reed_solomon_simd::engine::Neon;
@@ -19,7 +17,7 @@ use reed_solomon_simd::engine::Neon;
 // ======================================================================
 // CONST
 
-const SHARD_BYTES: usize = 1024;
+const SHARD_BYTES: usize = 64;
 
 // ======================================================================
 // UTIL
@@ -40,6 +38,8 @@ fn benchmarks_main(c: &mut Criterion) {
     let mut group = c.benchmark_group("main");
 
     for (original_count, recovery_count) in [
+        (16, 32),
+			/*
         // 2^n. original_count == recovery_count
         (32, 32),
         (64, 64),
@@ -65,6 +65,7 @@ fn benchmarks_main(c: &mut Criterion) {
         (16384, 8192),
         (16385, 16385), // 2^n + 1
         (57344, 8192),
+			*/
     ] {
         if original_count >= 1000 && recovery_count >= 1000 {
             group.sample_size(10);
@@ -289,104 +290,8 @@ fn benchmarks_rate_one<E: Engine>(c: &mut Criterion, name: &str, new_engine: fn(
 }
 
 // ======================================================================
-// BENCHMARKS - ENGINES
-
-fn benchmarks_engine(c: &mut Criterion) {
-    benchmarks_engine_one(c, "engine-Naive", Naive::new());
-    benchmarks_engine_one(c, "engine-NoSimd", NoSimd::new());
-
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    {
-        if is_x86_feature_detected!("ssse3") {
-            benchmarks_engine_one(c, "engine-Ssse3", Ssse3::new());
-        }
-        if is_x86_feature_detected!("avx2") {
-            benchmarks_engine_one(c, "engine-Avx2", Avx2::new());
-        }
-    }
-
-    #[cfg(target_arch = "aarch64")]
-    {
-        if std::arch::is_aarch64_feature_detected!("neon") {
-            benchmarks_engine_one(c, "engine-Neon", Neon::new());
-        }
-    }
-}
-
-fn benchmarks_engine_one<E: Engine>(c: &mut Criterion, name: &str, engine: E) {
-    let mut group = c.benchmark_group(name);
-
-    // XOR MUL
-
-    let mut x = &mut generate_shards(1, SHARD_BYTES, 0)[0];
-    let y = &generate_shards(1, SHARD_BYTES, 1)[0];
-
-    group.bench_function("xor", |b| {
-        b.iter(|| E::xor(black_box(&mut x), black_box(&y)))
-    });
-
-    group.bench_function("mul", |b| {
-        b.iter(|| engine.mul(black_box(&mut x), black_box(12345)))
-    });
-
-    // XOR_WITHIN
-
-    let shards_256_data = &mut generate_shards(1, 256 * SHARD_BYTES, 0)[0];
-    let mut shards_256 = ShardsRefMut::new(256, SHARD_BYTES, shards_256_data.as_mut());
-
-    group.bench_function("xor_within 128*2", |b| {
-        b.iter(|| {
-            E::xor_within(
-                black_box(&mut shards_256),
-                black_box(0),
-                black_box(128),
-                black_box(128),
-            )
-        })
-    });
-
-    // FORMAL DERIVATIVE
-
-    let shards_128_data = &mut generate_shards(1, 128 * SHARD_BYTES, 0)[0];
-    let mut shards_128 = ShardsRefMut::new(128, SHARD_BYTES, shards_128_data.as_mut());
-
-    group.bench_function("formal_derivative 128", |b| {
-        b.iter(|| E::formal_derivative(black_box(&mut shards_128)))
-    });
-
-    // FFT IFFT
-
-    group.bench_function("FFT 128", |b| {
-        b.iter(|| {
-            engine.fft(
-                black_box(&mut shards_128),
-                black_box(0),
-                black_box(128),
-                black_box(128),
-                black_box(128),
-            )
-        })
-    });
-
-    group.bench_function("IFFT 128", |b| {
-        b.iter(|| {
-            engine.ifft(
-                black_box(&mut shards_128),
-                black_box(0),
-                black_box(128),
-                black_box(128),
-                black_box(128),
-            )
-        })
-    });
-
-    group.finish();
-}
-
-// ======================================================================
 // MAIN
 
 criterion_group!(benches_main, benchmarks_main);
 criterion_group!(benches_rate, benchmarks_rate);
-criterion_group!(benches_engine, benchmarks_engine);
-criterion_main!(benches_main, benches_rate, benches_engine);
+criterion_main!(benches_main, benches_rate);
