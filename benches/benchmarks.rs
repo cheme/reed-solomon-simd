@@ -83,7 +83,7 @@ fn benchmarks_main(c: &mut Criterion) {
                         for index in 0..16 {
 													println!(":{:?}", original[index]);
                         }
-                        for index in 0..16 {
+                        for index in 16..32 {
                             decoder.add_recovery_shard(index, &recovery[index]).unwrap();
                         }
                         let r = decoder.decode().unwrap();
