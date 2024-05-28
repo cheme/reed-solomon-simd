@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use rand::{Rng, SeedableRng};
+use rand::{rngs::SmallRng, seq::SliceRandom, Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use reed_solomon_erasure::galois_16::ReedSolomon as ReedSolomon16;
 use reed_solomon_erasure::galois_8::ReedSolomon as ReedSolomon8;
@@ -9,7 +9,7 @@ use reed_solomon_novelpoly::{CodeParams, WrappedShard};
 // ======================================================================
 // CONST
 
-const SHARD_BYTES: usize = 1024;
+const SHARD_BYTES: usize = 64;
 
 // ======================================================================
 // MAIN
@@ -23,7 +23,7 @@ fn main() {
     println!("                           µs (init)   µs (encode)   µs (decode)");
     println!("                           ---------   -----------   -----------");
 
-    for count in [32, 64, 128, 256, 512, 1024, 4 * 1024, 32 * 1024] {
+    for count in [3, 32, 64, 128, 256, 512, 1024, 4 * 1024, 32 * 1024] {
         println!("\n{}:{} ({} kiB)", count, count, SHARD_BYTES / 1024);
         test_reed_solomon_simd(count);
         test_reed_solomon_16(count);
@@ -52,38 +52,112 @@ fn test_reed_solomon_simd(count: usize) {
     // CREATE ORIGINAL
 
     let mut original = vec![vec![0u8; SHARD_BYTES]; count];
-    let mut rng = ChaCha8Rng::from_seed([0; 32]);
-    for original in &mut original {
+                for o in original.iter_mut() {
+                    for i in 0..2 {
+                        o[i] = i  as u8;
+                    }
+                }
+    let mut rng = SmallRng::from_seed([0; 32]);
+	  for original in &mut original {
         rng.fill::<[u8]>(original);
     }
 
+    println!("Original: {:?}", original);
+
     // ENCODE
 
+		const POINT_SIZE: usize = 2;
+		const N_SHARD: usize = 342;
+		const N_POINT_BATCH: usize = 32;
+		const INPUT_DATA_LEN: usize = POINT_SIZE * N_SHARD * N_POINT_BATCH;
+
     let start = Instant::now();
-    let recovery = reed_solomon_simd::encode(count, count, &original).unwrap();
+    let recovery = reed_solomon_simd::encode(count, 2 * count, &original).unwrap();
     let elapsed = start.elapsed();
     print!("{:14}", elapsed.as_micros());
 
     // PREPARE DECODE
 
+    println!("{:?}", recovery);
     let decoder_recovery: Vec<_> = recovery.iter().enumerate().collect();
+    println!("Recovery: {:?}", original);
 
     // DECODE
-
     let start = Instant::now();
-    let restored = reed_solomon_simd::decode(count, count, [(0, ""); 0], decoder_recovery).unwrap();
+    let restored =
+        reed_solomon_simd::decode(count, 2 * count, [(0, ""); 0], decoder_recovery).unwrap();
     let elapsed = start.elapsed();
     println!("{:14}", elapsed.as_micros());
 
+    //const SMALL_SHARD: usize = 2;
+		//nb of point
+    const SMALL_SHARD: usize = 2;
     // CHECK
+    for i in 0..count {
+        let mut j = 0;
+        while j < 32 - SMALL_SHARD {
+            let decoder_recovery: Vec<_> = recovery.iter().enumerate().collect();
+
+            println!("Recovery: {:?}", decoder_recovery);
+            let mut rand_reco: Vec<usize> = (0..(2 * count)).collect();
+            rand_reco.shuffle(&mut rng);
+            rand_reco.truncate(count);
+
+            let restored = reed_solomon_simd::decode(
+                count,
+                2 * count,
+                [(0, ""); 0],
+                rand_reco.into_iter().map(|i| {
+                    let mut r = vec![0; SHARD_BYTES];
+                    r[j..j + SMALL_SHARD]
+                    .copy_from_slice(&decoder_recovery[i].1[j..j + SMALL_SHARD]);
+										r[j + 32..j + 32 + SMALL_SHARD]
+                    .copy_from_slice(&decoder_recovery[i].1[j + 32..j + 32 + SMALL_SHARD]);
+ 
+
+                    //                    r[j..j + SMALL_SHARD]
+                    //                       .copy_from_slice(&decoder_recovery[i].1[j..j + SMALL_SHARD]);
+//                    r[j] = decoder_recovery[i].1[j];
+//                    r[j + 32] = decoder_recovery[i].1[j + 32];
+                    (i, r)
+                }),
+            )
+            .unwrap();
+
+            //println!("{}: {} == {}", i, restored[&i][j], original[i][j]);
+            assert_eq!(restored.len(), count);
+            for i in 0..count {
+/*assert_eq!(
+                    restored[&i][j],
+                    original[i][j]
+                );
+assert_eq!(
+                    restored[&i][j + 32],
+                    original[i][j + 32]
+                );
+*/
+                assert_eq!(
+                    restored[&i][j..j + SMALL_SHARD],
+                    original[i][j..j + SMALL_SHARD]
+                );
+                assert_eq!(
+                    restored[&i][j + 32..j + 32 + SMALL_SHARD],
+                    original[i][j + 32 ..j + 32 + SMALL_SHARD]
+                );
+
+            }
+            j += SMALL_SHARD;
+        }
+    }
 
     for i in 0..count {
         assert_eq!(restored[&i], original[i]);
     }
+    panic!("Done");
 }
 
 // ======================================================================
-// reed-solomon-16
+// reed-s)olomon-16
 
 fn test_reed_solomon_16(count: usize) {
     // INIT
@@ -97,7 +171,7 @@ fn test_reed_solomon_16(count: usize) {
     // CREATE ORIGINAL
 
     let mut original = vec![vec![0u8; SHARD_BYTES]; count];
-    let mut rng = ChaCha8Rng::from_seed([0; 32]);
+    let mut rng = SmallRng::from_seed([0; 32]);
     for original in &mut original {
         rng.fill::<[u8]>(original);
     }
@@ -141,7 +215,7 @@ fn test_reed_solomon_erasure_8(count: usize) {
     // CREATE ORIGINAL
 
     let mut original = vec![vec![0u8; SHARD_BYTES]; count];
-    let mut rng = ChaCha8Rng::from_seed([0; 32]);
+    let mut rng = SmallRng::from_seed([0; 32]);
     for shard in &mut original {
         rng.fill::<[u8]>(shard);
     }
@@ -190,7 +264,7 @@ fn test_reed_solomon_erasure_16(count: usize) {
     // CREATE ORIGINAL
 
     let mut original = vec![vec![[0u8; 2]; SHARD_BYTES / 2]; count];
-    let mut rng = ChaCha8Rng::from_seed([0; 32]);
+    let mut rng = SmallRng::from_seed([0; 32]);
     for shard in &mut original {
         for element in shard.iter_mut() {
             element[0] = rng.gen();
@@ -247,7 +321,7 @@ fn test_reed_solomon_novelpoly(count: usize) {
     // CREATE ORIGINAL
 
     let mut original = vec![0u8; count * SHARD_BYTES];
-    let mut rng = ChaCha8Rng::from_seed([0; 32]);
+    let mut rng = SmallRng::from_seed([0; 32]);
     rng.fill::<[u8]>(&mut original);
 
     // ENCODE
