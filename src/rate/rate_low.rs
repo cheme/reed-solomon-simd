@@ -207,22 +207,39 @@ impl<E: Engine> RateDecoder<E> for LowRateDecoder<E> {
         // work[chunk_size     .. original_end  ] = recovery * erasures
         // work[recovery_end   ..               ] = 0
 
-        for i in 0..original_count {
+        let mut i = 0;
+        while i < original_count {
             if received[i] {
+                if received[i + 1] {
+                    self.engine
+                        .mul2(work.dist2_mut2(i, 1), [erasures[i], erasures[i + 1]]);
+                    i += 2;
+                    continue;
+                }
+
                 self.engine.mul(&mut work[i], erasures[i]);
             } else {
                 work[i].fill(0);
             }
+            i += 1;
         }
 
         work.zero(original_count..chunk_size);
 
-        for i in chunk_size..recovery_end {
+        let mut i = chunk_size;
+        while i < recovery_end {
             if received[i] {
+                if received[i + 1] {
+                    self.engine
+                        .mul2(work.dist2_mut2(i, 1), [erasures[i], erasures[i + 1]]);
+                    i += 2;
+                    continue;
+                }
                 self.engine.mul(&mut work[i], erasures[i]);
             } else {
                 work[i].fill(0);
             }
+            i += 1;
         }
 
         work.zero(recovery_end..);
@@ -235,9 +252,19 @@ impl<E: Engine> RateDecoder<E> for LowRateDecoder<E> {
 
         // REVEAL ERASURES
 
-        for i in 0..original_count {
+        let mut i = 0;
+        while i < original_count {
             if !received[i] {
+                if !received[i + 1] {
+                    self.engine.mul2(
+                        work.dist2_mut2(i, 1),
+                        [GF_MODULUS - erasures[i], GF_MODULUS - erasures[i + 1]],
+                    );
+                    i += 2;
+                    continue;
+                }
                 self.engine.mul(&mut work[i], GF_MODULUS - erasures[i]);
+                i += 1;
             }
         }
 

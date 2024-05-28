@@ -70,6 +70,19 @@ impl Engine for NoSimd {
         }
     }
 
+    fn mul2(&self, x: [&mut [u8]; 2], log_m: [GfElement; 2]) {
+			self.mul(x[0], log_m[0]);
+			self.mul(x[1], log_m[1]);
+    }
+
+    fn mul4(&self, x: [&mut [u8]; 4], log_m: [GfElement; 4]) {
+        unimplemented!()
+    }
+
+    fn mul6(&self, x: [&mut [u8]; 6], log_m: [GfElement; 6]) {
+        unimplemented!()
+    }
+
     fn xor(x: &mut [u8], y: &[u8]) {
         let x64: &mut [u32] = bytemuck::cast_slice_mut(x);
         let y64: &[u32] = bytemuck::cast_slice(y);

@@ -26,12 +26,12 @@ impl DefaultEngine {
     /// 1. [`Neon`]
     /// 2. [`NoSimd`]
     pub fn new() -> Self {
-			// nothing to gain on mul when using 4b shards. Note naive and nosimd
-			// gives similar performance on 4b shards, on my laptop naive is
-			// better TODO would need to bench on other more stable machines.
-      //DefaultEngine(Box::new(NoSimd::new()))
-      DefaultEngine(Box::new(Naive::new()))
-				/*
+        // nothing to gain on mul when using 4b shards. Note naive and nosimd
+        // gives similar performance on 4b shards, on my laptop naive is
+        // better TODO would need to bench on other more stable machines.
+        DefaultEngine(Box::new(NoSimd::new()))
+        //DefaultEngine(Box::new(Naive::new()))
+        /*
         //DefaultEngine(Box::new(Naive::new()))
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -52,7 +52,7 @@ impl DefaultEngine {
         }
 
         DefaultEngine(Box::new(NoSimd::new()))
-				*/
+                */
     }
 }
 
@@ -93,6 +93,18 @@ impl Engine for DefaultEngine {
 
     fn mul(&self, x: &mut [u8], log_m: GfElement) {
         self.0.mul(x, log_m)
+    }
+
+    fn mul2(&self, x: [&mut [u8]; 2], log_m: [GfElement; 2]) {
+        self.0.mul2(x, log_m)
+    }
+
+    fn mul4(&self, x: [&mut [u8]; 4], log_m: [GfElement; 4]) {
+        self.0.mul4(x, log_m)
+    }
+
+    fn mul6(&self, x: [&mut [u8]; 6], log_m: [GfElement; 6]) {
+        self.0.mul6(x, log_m)
     }
 
     fn xor(x: &mut [u8], y: &[u8]) {

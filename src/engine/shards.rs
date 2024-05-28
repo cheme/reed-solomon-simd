@@ -83,6 +83,15 @@ impl<'a> ShardsRefMut<'a> {
         (&mut a[..self.shard_bytes], &mut b[..self.shard_bytes])
     }
 
+    /// Same as `dist2_mut`, different return type.
+    pub fn dist2_mut2(&mut self, mut pos: usize, mut dist: usize) -> [&mut [u8]; 2] {
+        pos *= self.shard_bytes;
+        dist *= self.shard_bytes;
+
+        let (a, b) = self.data[pos..].split_at_mut(dist);
+        [&mut a[..self.shard_bytes], &mut b[..self.shard_bytes]]
+    }
+
     /// Returns mutable references to shards at
     /// `pos`, `pos + dist`, `pos + dist * 2` and `pos + dist * 3`.
     ///

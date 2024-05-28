@@ -118,7 +118,7 @@ pub(crate) fn eval_poly(erasures: &mut [GfElement; GF_ORDER], truncated_size: us
     fwht::fwht(erasures, truncated_size);
 
     for (e, factor) in std::iter::zip(erasures.iter_mut(), log_walsh.iter()) {
-			// TODO 4b limit? likely ok.
+        // TODO 4b limit? likely ok.
         let product = u32::from(*e) * u32::from(*factor);
         *e = add_mod(product as GfElement, (product >> GF_BITS) as GfElement);
     }
@@ -210,6 +210,15 @@ pub trait Engine {
 
     /// `x[] *= log_m`
     fn mul(&self, x: &mut [u8], log_m: GfElement);
+
+    /// `x[] *= log_m`
+    fn mul2(&self, x: [&mut [u8]; 2], log_m: [GfElement; 2]);
+
+    /// `x[] *= log_m`
+    fn mul4(&self, x: [&mut [u8]; 4], log_m: [GfElement; 4]);
+
+    /// `x[] *= log_m`
+    fn mul6(&self, x: [&mut [u8]; 6], log_m: [GfElement; 6]);
 
     /// `x[] ^= y[]`
     fn xor(x: &mut [u8], y: &[u8])

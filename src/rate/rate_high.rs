@@ -207,30 +207,49 @@ impl<E: Engine> RateDecoder<E> for HighRateDecoder<E> {
         // work[chunk_size     .. original_end  ] = original * erasures
         // work[original_end   ..               ] = 0
 
-        for i in 0..recovery_count {
+        let mut i = 0;
+        while i < recovery_count {
             if received[i] {
-							// TODO for 4b should be possible to batch for consecutive i here
-							// -> on 8byte for u64 variant.
-							// -> on 32byte for sse3 variant.
-							// -> on 64byte for avx2 variant.
-							// same thing apply on most engine.mul.
-							//
-							// But the backend need to use different high low byte ordering which
-							// may make optim not sensible (see readme).
-              self.engine.mul(&mut work[i], erasures[i]);
+                // No check, we assume recovery count is aligned.
+                if received[i + 1] {
+                    self.engine
+                        .mul2(work.dist2_mut2(i, 1), [erasures[i], erasures[i + 1]]);
+                    i += 2;
+                    continue;
+                }
+                // TODO for 4b should be possible to batch for consecutive i here
+                // -> on 8byte for u64 variant.
+                // -> on 32byte for sse3 variant.
+                // -> on 64byte for avx2 variant.
+                // same thing apply on most engine.mul.
+                //
+                // But the backend need to use different high low byte ordering which
+                // may make optim not sensible (see readme).
+                self.engine.mul(&mut work[i], erasures[i]);
+                i += 1;
             } else {
                 work[i].fill(0);
+                i += 1;
             }
         }
 
         work.zero(recovery_count..chunk_size);
 
-        for i in chunk_size..original_end {
+        let mut i = chunk_size;
+        while i < original_end {
             if received[i] {
+                // No check, we assume recovery count is aligned.
+                if received[i + 1] {
+                    self.engine
+                        .mul2(work.dist2_mut2(i, 1), [erasures[i], erasures[i + 1]]);
+                    i += 2;
+                    continue;
+                }
                 self.engine.mul(&mut work[i], erasures[i]);
             } else {
                 work[i].fill(0);
             }
+            i += 1;
         }
 
         work.zero(original_end..);
@@ -243,10 +262,21 @@ impl<E: Engine> RateDecoder<E> for HighRateDecoder<E> {
 
         // REVEAL ERASURES
 
-        for i in chunk_size..original_end {
+        let mut i = chunk_size;
+        while i < original_end {
             if !received[i] {
+                // No check, we assume recovery count is aligned.
+                if !received[i + 1] {
+                    self.engine.mul2(
+                        work.dist2_mut2(i, 1),
+                        [GF_MODULUS - erasures[i], GF_MODULUS - erasures[i + 1]],
+                    );
+                    i += 2;
+                    continue;
+                }
                 self.engine.mul(&mut work[i], GF_MODULUS - erasures[i]);
             }
+            i += 1;
         }
 
         // DONE
