@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::{thread::yield_now, time::Instant};
 
 use rand::{rngs::SmallRng, seq::SliceRandom, Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
@@ -50,26 +50,38 @@ fn test_reed_solomon_simd(count: usize) {
     print!("> reed-solomon-simd        {:9}", elapsed.as_micros());
 
     // CREATE ORIGINAL
-
-    let mut original = vec![vec![0u8; SHARD_BYTES]; count];
-                for o in original.iter_mut() {
-                    for i in 0..2 {
-                        o[i] = i  as u8;
-                    }
-                }
+    const POINT_SIZE: usize = 2;
+    const N_SHARD: usize = 342;
+    const N_POINT_BATCH: usize = 32;
+    const ORIGINAL_POINTS: usize = N_SHARD * N_POINT_BATCH;
+    const INPUT_DATA_LEN: usize = POINT_SIZE * N_SHARD * N_POINT_BATCH;
+    const RECOVERY_POINTS: usize = ORIGINAL_POINTS * 2;
     let mut rng = SmallRng::from_seed([0; 32]);
-	  for original in &mut original {
-        rng.fill::<[u8]>(original);
+
+    let mut original_data = vec![0u8; INPUT_DATA_LEN];
+    rng.fill::<[u8]>(&mut original_data);
+
+    let mut original = Vec::new();
+    let mut ori_shard = vec![0; SHARD_BYTES];
+    let mut o = 0;
+    for i in 0..INPUT_DATA_LEN / 2 {
+        ori_shard[o] = original_data[i * 2];
+        ori_shard[o + 32] = original_data[i * 2 + 1];
+        o += 1;
+        if o == 32 {
+            original.push(ori_shard);
+            ori_shard = vec![0; SHARD_BYTES];
+            o = 0;
+        }
     }
+    assert!(o == 0);
+    assert!(original.len() == 342);
 
     println!("Original: {:?}", original);
 
-    // ENCODE
+    let count = original.len();
 
-		const POINT_SIZE: usize = 2;
-		const N_SHARD: usize = 342;
-		const N_POINT_BATCH: usize = 32;
-		const INPUT_DATA_LEN: usize = POINT_SIZE * N_SHARD * N_POINT_BATCH;
+    // ENCODE
 
     let start = Instant::now();
     let recovery = reed_solomon_simd::encode(count, 2 * count, &original).unwrap();
@@ -79,77 +91,40 @@ fn test_reed_solomon_simd(count: usize) {
     // PREPARE DECODE
 
     println!("{:?}", recovery);
+		assert_eq!(recovery.len(), 2 * N_SHARD);
     let decoder_recovery: Vec<_> = recovery.iter().enumerate().collect();
-    println!("Recovery: {:?}", original);
+    let mut recovery_points = Vec::with_capacity(RECOVERY_POINTS);
+    for r in recovery.iter() {
+        for i in 0..32 {
+            recovery_points.push(r[i]);
+            recovery_points.push(r[i + 32]);
+        }
+    }
+    assert_eq!(recovery_points.len(), RECOVERY_POINTS * 2);
+    println!("Recovery: {:?}", recovery_points);
 
     // DECODE
     let start = Instant::now();
-    let restored =
-        reed_solomon_simd::decode(count, 2 * count, [(0, ""); 0], decoder_recovery).unwrap();
-    let elapsed = start.elapsed();
-    println!("{:14}", elapsed.as_micros());
-
-    //const SMALL_SHARD: usize = 2;
-		//nb of point
-    const SMALL_SHARD: usize = 2;
-    // CHECK
-    for i in 0..count {
-        let mut j = 0;
-        while j < 32 - SMALL_SHARD {
-            let decoder_recovery: Vec<_> = recovery.iter().enumerate().collect();
-
-            println!("Recovery: {:?}", decoder_recovery);
-            let mut rand_reco: Vec<usize> = (0..(2 * count)).collect();
-            rand_reco.shuffle(&mut rng);
-            rand_reco.truncate(count);
-
-            let restored = reed_solomon_simd::decode(
-                count,
-                2 * count,
-                [(0, ""); 0],
-                rand_reco.into_iter().map(|i| {
-                    let mut r = vec![0; SHARD_BYTES];
-                    r[j..j + SMALL_SHARD]
-                    .copy_from_slice(&decoder_recovery[i].1[j..j + SMALL_SHARD]);
-										r[j + 32..j + 32 + SMALL_SHARD]
-                    .copy_from_slice(&decoder_recovery[i].1[j + 32..j + 32 + SMALL_SHARD]);
- 
-
-                    //                    r[j..j + SMALL_SHARD]
-                    //                       .copy_from_slice(&decoder_recovery[i].1[j..j + SMALL_SHARD]);
-//                    r[j] = decoder_recovery[i].1[j];
-//                    r[j + 32] = decoder_recovery[i].1[j + 32];
-                    (i, r)
-                }),
-            )
-            .unwrap();
-
-            //println!("{}: {} == {}", i, restored[&i][j], original[i][j]);
-            assert_eq!(restored.len(), count);
-            for i in 0..count {
-/*assert_eq!(
-                    restored[&i][j],
-                    original[i][j]
-                );
-assert_eq!(
-                    restored[&i][j + 32],
-                    original[i][j + 32]
-                );
-*/
-                assert_eq!(
-                    restored[&i][j..j + SMALL_SHARD],
-                    original[i][j..j + SMALL_SHARD]
-                );
-                assert_eq!(
-                    restored[&i][j + 32..j + 32 + SMALL_SHARD],
-                    original[i][j + 32 ..j + 32 + SMALL_SHARD]
-                );
-
-            }
-            j += SMALL_SHARD;
+    let mut reco_vectors = vec![vec![0; SHARD_BYTES]; N_SHARD];
+    for s in 0..32 {
+        // add shard to every recovery vector. // TODO done on rec only: TODO include original too.
+        let mut rand: Vec<usize> = (0..N_SHARD * 2).collect();
+        rand.shuffle(&mut rng);
+        rand.truncate(N_SHARD);
+        for j in 0..N_SHARD {
+            let mut r = vec![0; SHARD_BYTES];
+//            reco_vectors[j][s] = recovery_points[rand[j] * 64 + s];
+//            reco_vectors[j][s + 32] = recovery_points[rand[j] * 64 + s + 1];
+            reco_vectors[j][s] = recovery[rand[j]][s];
+            reco_vectors[j][s + 32] = recovery[rand[j]][s + 32];
         }
     }
-
+    let recovery_points_shards = recovery_points
+        .chunks(SHARD_BYTES)
+        .map(|c| c.to_vec())
+        .collect::<Vec<_>>();
+    // use a point per 64 byte shard indices from
+    let restored = reed_solomon_simd::decode(count, 2 * count, [(0, ""); 0], reco_vectors.iter().enumerate()).unwrap();
     for i in 0..count {
         assert_eq!(restored[&i], original[i]);
     }
