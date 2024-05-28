@@ -26,12 +26,12 @@ impl DefaultEngine {
     /// 1. [`Neon`]
     /// 2. [`NoSimd`]
     pub fn new() -> Self {
-			// nothing to gain on mul when using 4b shards. Note naive and nosimd
-			// gives similar performance on 4b shards, on my laptop naive is
-			// better TODO would need to bench on other more stable machines.
-      //DefaultEngine(Box::new(NoSimd::new()))
-      DefaultEngine(Box::new(Naive::new()))
-				/*
+        // nothing to gain on mul when using 4b shards. Note naive and nosimd
+        // gives similar performance on 4b shards, on my laptop naive is
+        // better TODO would need to bench on other more stable machines.
+        //DefaultEngine(Box::new(NoSimd::new()))
+        DefaultEngine(Box::new(Naive::new()))
+        /*
         //DefaultEngine(Box::new(Naive::new()))
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -52,7 +52,7 @@ impl DefaultEngine {
         }
 
         DefaultEngine(Box::new(NoSimd::new()))
-				*/
+                */
     }
 }
 

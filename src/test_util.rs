@@ -80,20 +80,19 @@ pub(crate) fn generate_original(
 
 #[test]
 fn generate_test_vector() {
-	let original_count = 1024;
-	let recovery_count = original_count * 2;
-	let shard_bytes = 4;
-	let seed = 0;
-  let mut rng = rand::rngs::SmallRng::from_seed([seed; 32]);
-  let mut original = vec![vec![0u8; shard_bytes]; original_count];
-  for original in &mut original {
-     rng.fill::<[u8]>(original);
-  }
-	let recovery  = crate::encode(original_count, recovery_count, original.iter()).unwrap();
+    let original_count = 1024;
+    let recovery_count = original_count * 2;
+    let shard_bytes = 4;
+    let seed = 0;
+    let mut rng = rand::rngs::SmallRng::from_seed([seed; 32]);
+    let mut original = vec![vec![0u8; shard_bytes]; original_count];
+    for original in &mut original {
+        rng.fill::<[u8]>(original);
+    }
+    let recovery = crate::encode(original_count, recovery_count, original.iter()).unwrap();
 
-	panic!("{:?}", (original, recovery));
+    panic!("{:?}", (original, recovery));
 }
-
 
 // ======================================================================
 // RATE ENCODER/DECODER - TEST SINGLE-ROUND ROUNDTRIP

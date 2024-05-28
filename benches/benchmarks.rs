@@ -43,24 +43,21 @@ fn generate_shards(shard_count: usize, shard_bytes: usize, seed: u8) -> Vec<Vec<
 fn benchmarks_main(c: &mut Criterion) {
     let mut group = c.benchmark_group("main");
 
-		// (12, 4k, 2)?
+    // (12, 4k, 2)?
     for (shard_bytes, content_size, recovery_mult) in [
-//			(1<<6, 1 << 16, 2),
-//			(1<<8, 1<< 16, 2),
-//			(1<<10, 1<< 16, 2),
+        //			(1<<6, 1 << 16, 2),
+        //			(1<<8, 1<< 16, 2),
+        //			(1<<10, 1<< 16, 2),
 
-
-			// for 4k min shard appears to b 256bytes
-//ko			(1<<6, 1 << 22, 3),
-				(4, 1024 * 4, 2),
-				//(4, 1 << 4, 2),
-//				(12, 1 << 22, 2),
-
-				(1 << 8, 1 << 22, 2),
-				(1 << 12, 1 << 22, 2),
-				(1 << 18, 1 << 22, 2),
-
-			/*
+        // for 4k min shard appears to b 256bytes
+        //ko			(1<<6, 1 << 22, 3),
+        (4, 1024 * 4, 2),
+        //(4, 1 << 4, 2),
+        //				(12, 1 << 22, 2),
+        (1 << 8, 1 << 22, 2),
+        (1 << 12, 1 << 22, 2),
+        (1 << 18, 1 << 22, 2),
+        /*
         // 2^n. original_count == recovery_count
         (32, 32),
         (64, 64),
@@ -86,10 +83,10 @@ fn benchmarks_main(c: &mut Criterion) {
         (16384, 8192),
         (16385, 16385), // 2^n + 1
         (57344, 8192),
-			*/
+            */
     ] {
-				let original_count = content_size / shard_bytes;
-				let recovery_count = original_count * recovery_mult;
+        let original_count = content_size / shard_bytes;
+        let recovery_count = original_count * recovery_mult;
         if original_count >= 1000 && recovery_count >= 1000 {
             group.sample_size(10);
         } else {
@@ -151,7 +148,12 @@ fn benchmarks_main(c: &mut Criterion) {
                         for index in 0..recovery_provided_count {
                             decoder.add_recovery_shard(index, &recovery[index]).unwrap();
                         }
-                        decoder.decode().unwrap();
+                        let r = decoder.decode().unwrap();
+												for index in 0..original_count {
+													if let Some(r) = r.restored_original(index) {
+														assert_eq!(r, &original[index]);
+													}
+												}
                     });
                 },
             );
