@@ -333,13 +333,15 @@ fn test_reed_solomon_novelpoly(count: usize) {
 
 
 const SEGMENT_SIZE: usize = 4096;
+const SEGMENT_SIZE_PADDING: usize = 8;
+const NB_POINT_PER_SEGMENTS: usize = (SEGMENT_SIZE + SEGMENT_SIZE_PADDING) / N_SHARDS / POINT_SIZE; // 6
 const POINT_SIZE: usize = 2;
 const N_SHARDS: usize = 342;
 const N_POINT_BATCH: usize = 32;
 const SHARD_BATCH_SIZE: usize = N_POINT_BATCH * POINT_SIZE * N_SHARDS;
 
 
-fn build_original(original_data_segments: usize, rng: &mut SmallRng) -> (Vec<u8>, Vec<[u8; SHARD_BYTES]>) {
+fn build_original(original_data_segments: usize, rng: &mut SmallRng) -> (Vec<u8>, Vec<[u8; SHARD_BYTES]>, Vec<Vec<(u8, u8)>>, Vec<((usize, usize), (usize, usize))>) {
 	let mut original = vec![0; original_data_segments * SEGMENT_SIZE];
 	rng.fill::<[u8]>(&mut original);
 
@@ -352,6 +354,9 @@ fn build_original(original_data_segments: usize, rng: &mut SmallRng) -> (Vec<u8>
 	println!("{:?}", number_shards_batch);
 	let mut original_shards = vec![[0u8; SHARD_BYTES]; number_shards_batch * N_SHARDS];
 
+	let mut dist = Vec::new();
+	let mut segment_bound = Vec::new();
+	let mut d = Vec::new(); 
 	let mut segment_batch = 0;
 	let mut at = 0; // pos in segment batch
 	let mut at2 = 0; // 32 point pos in 64b shards
@@ -361,13 +366,25 @@ fn build_original(original_data_segments: usize, rng: &mut SmallRng) -> (Vec<u8>
 		// interleave over N_POINT_BATCH so a single segment can be recover from m fix offset of 64b
 		// shards.
 
-		let start_ch = (segment_batch * N_SHARDS + at, at2);
-		for b in 0..(ch.len() / 2) {
+		let start_ch = (segment_batch, dist.len());
+		// this goes over 3*points over 342 batch since
+		// 32 is not a multiple it can be on 2 different segment_batch.
+		for b in 0..(ch.len() / 2) + 4 {
 				let s = segment_batch * N_SHARDS + at;
-				original_shards[s][at2] = ch[b * 2];
-				original_shards[s][at2 + 32] = ch[b * 2 + 1];
+				let point = if b >= (ch.len() / 2) {
+					// padding
+					(0, 0)
+				} else {
+					(ch[b * 2], ch[b*2 + 1])
+				};
+				original_shards[s][at2] = point.0;
+				original_shards[s][at2 + 32] = point.1;
+				d.push(point);
+
 				at += 1;
 				if at == N_SHARDS {
+					dist.push(d);
+					d = Vec::new();
 					at = 0;
 					at2 += 1;
 					if at2 == 32 {
@@ -376,50 +393,72 @@ fn build_original(original_data_segments: usize, rng: &mut SmallRng) -> (Vec<u8>
 					}
 				}
 		}
-		let end_ch = (segment_batch * N_SHARDS + at, at2);
-		println!("{:?}", (start_ch, end_ch));
+		let end_ch = (segment_batch, dist.len());
+		assert_eq!(at, 0);
+//		println!("{:?}", (start_ch, end_ch));
+		segment_bound.push((start_ch, end_ch));
 	}
 
-	(original, original_shards)
+	// distributed chunks (and hash in segment) will
+	// be cat(dist(i)(v).. 6time) with v the validator ix
+	// and i start chunk dist to end chunk dist.
+	(original, original_shards, dist, segment_bound)
 }
 
 /*
-// distritbute sub-shards as segment chunks.
-fn distribute(reco: Vec<[u8; 64]>) -> Vec<[]> {
-	let mut segment_batch = 0;
-	let mut at = 0; // pos in segment batch
-	let mut at2 = 0; // 32 point pos in 64b shards
-	for i in 0..original_data_segments {
-		// runing over segment is totally not necessary: could justrun over original pairs of bytes.
-		let ch = &original[i * SEGMENT_SIZE..(i + 1) * SEGMENT_SIZE];
-		// interleave over N_POINT_BATCH so a single segment can be recover from m fix offset of 64b
-		// shards.
+fn reco_to_dist(reco: &[Vec<u8>]) -> Vec<Vec<(u8, u8)>> {
+	// rec is n time 2*342 64byte shard
+	assert_eq!(reco.len() % N_SHARDS, 0);
 
-		for b in 0..(ch.len() / 2) {
-				let s = segment_batch * N_SHARDS + at;
-				original_shards[s][at2] = ch[b * 2];
-				original_shards[s][at2 + 32] = ch[b * 2 + 1];
-				at += 1;
-				if at == N_SHARDS {
-					at = 0;
-					at2 += 1;
-					if at2 == 32 {
-						at2 = 0;
-						segment_batch += 1;
-					}
-				}
+	let nb_cycle = reco.len() / N_SHARDS;
+
+	for c in 0..nb_cycle() {
+	}
+	// same dist as ori warn need to take point.
+	let mut dist1 = Vec::new(); // TODO capacity same as ori
+
+	// simply point by point distributed amongst val
+	
+	let mut d1 = Vec::with_capacity(N_SHARDS);
+	let mut i_val = 0;
+	for r in 0..reco.len() {
+		let r1 = &reco[r];
+		for i in 0..32 {
+			let point1 = (r1[i], r1[32 + i]);
+			d1.push(point1);
+			i_val += 1;
+			if i_val == N_SHARDS {
+				dist1.push(d1);
+				d1 = Vec::with_capacity(N_SHARDS);
+				i_val = 0;
+			}
 		}
 	}
-
-
+	(dist1, dist2)
 }
 */
+
 fn scenarii(data_chunks: usize) {
   let mut rng = SmallRng::from_seed([0; 32]);
-	let (original, o_shards) = build_original(data_chunks, &mut rng);
+	let (original, o_shards, o_dist, o_dist_bound) = build_original(data_chunks, &mut rng);
 	println!("o data size: {:?}", original.len());
 	println!("o sharded size: {:?}", o_shards.len() * SHARD_BYTES);
 	let count = o_shards.len();
 	let r_shards = reed_solomon_simd::encode(count, 2 * count, &o_shards).unwrap();
+	assert_eq!(r_shards.len(), o_shards.len() * 2);
+/*
+	let r_dist1 = reco_to_dist(&r_shards[..r_shards.len()/2]);
+	let r_dist2 = reco_to_dist(&r_shards[r_shards.len()/2..]);
+	assert_eq!(r_dist1.len(), o_dist.len());
+	assert_eq!(r_dist2.len(), o_dist.len());
+*/
  
+}
+
+struct RecoConf {
+	nb_chunks: usize,
+	nb_percent_val_off: usize, // TODO random , then we want to get a fewer number of call so get as
+														 // many as possible sub shard from chunk to rebuild on all 341. ->
+														 // just count.
+	favor_reco: bool, // otherwhise we go first on the originals.
 }
