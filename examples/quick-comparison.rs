@@ -361,6 +361,40 @@ fn build_original(original_data_segments: usize, rng: &mut SmallRng) -> (Vec<u8>
 		// interleave over N_POINT_BATCH so a single segment can be recover from m fix offset of 64b
 		// shards.
 
+		let start_ch = (segment_batch * N_SHARDS + at, at2);
+		for b in 0..(ch.len() / 2) {
+				let s = segment_batch * N_SHARDS + at;
+				original_shards[s][at2] = ch[b * 2];
+				original_shards[s][at2 + 32] = ch[b * 2 + 1];
+				at += 1;
+				if at == N_SHARDS {
+					at = 0;
+					at2 += 1;
+					if at2 == 32 {
+						at2 = 0;
+						segment_batch += 1;
+					}
+				}
+		}
+		let end_ch = (segment_batch * N_SHARDS + at, at2);
+		println!("{:?}", (start_ch, end_ch));
+	}
+
+	(original, original_shards)
+}
+
+/*
+// distritbute sub-shards as segment chunks.
+fn distribute(reco: Vec<[u8; 64]>) -> Vec<[]> {
+	let mut segment_batch = 0;
+	let mut at = 0; // pos in segment batch
+	let mut at2 = 0; // 32 point pos in 64b shards
+	for i in 0..original_data_segments {
+		// runing over segment is totally not necessary: could justrun over original pairs of bytes.
+		let ch = &original[i * SEGMENT_SIZE..(i + 1) * SEGMENT_SIZE];
+		// interleave over N_POINT_BATCH so a single segment can be recover from m fix offset of 64b
+		// shards.
+
 		for b in 0..(ch.len() / 2) {
 				let s = segment_batch * N_SHARDS + at;
 				original_shards[s][at2] = ch[b * 2];
@@ -377,13 +411,15 @@ fn build_original(original_data_segments: usize, rng: &mut SmallRng) -> (Vec<u8>
 		}
 	}
 
-	(original, original_shards)
+
 }
-
-
+*/
 fn scenarii(data_chunks: usize) {
   let mut rng = SmallRng::from_seed([0; 32]);
 	let (original, o_shards) = build_original(data_chunks, &mut rng);
 	println!("o data size: {:?}", original.len());
 	println!("o sharded size: {:?}", o_shards.len() * SHARD_BYTES);
+	let count = o_shards.len();
+	let r_shards = reed_solomon_simd::encode(count, 2 * count, &o_shards).unwrap();
+ 
 }
