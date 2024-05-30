@@ -361,6 +361,15 @@ struct ChunkedData {
 }
 
 impl ChunkedData {
+    fn from_decode(data: std::collections::BTreeMap<usize, Vec<u8>>) -> Self {
+        assert!(data.len() == N_SHARDS);
+        assert!(*data.keys().last().unwrap() == N_SHARDS - 1);
+        let mut shards = Self::init_sized(0);
+        for (k, v) in data {
+            shards.shards[k] = v;
+        }
+        shards
+    }
     fn init(original_size: usize) -> Self {
         // So for testing best perf have original data chunks multiple of 32.
         debug_assert!(original_size % N_SHARDS == 0); // size from padded segments.
@@ -429,6 +438,21 @@ struct DistData {
 }
 
 impl DistData {
+    fn new(shard_len: usize) -> Self {
+        let nb = ((shard_len - 1) / 12) + 1;
+        let mut dist: [MaybeUninit<Vec<[u8; 12]>>; N_SHARDS] =
+            unsafe { MaybeUninit::uninit().assume_init() };
+
+        for i in 0..N_SHARDS {
+            dist[i].write(vec![[0; 12]; nb]);
+        }
+        unsafe {
+            DistData {
+                shards: std::mem::transmute(dist),
+            }
+        }
+    }
+
     fn to_chunked(&self) -> ChunkedData {
         // do not round up (we already pad dist data so chunked data is lower)
         let chunk_len = self.shards[0].len() * 12 / 64;
@@ -501,6 +525,23 @@ fn build_original(
     (original, ChunkedData { shards })
 }
 
+fn build_rec(reco: Vec<Vec<u8>>) -> (ChunkedData, ChunkedData) {
+    assert_eq!(reco.len(), N_SHARDS * 2);
+    assert_eq!(reco[0].len() % 64, 0);
+
+    // TODO can run on uninit here (using size 0 for now).
+    let mut shards1 = ChunkedData::init_sized(0);
+    let mut shards2 = ChunkedData::init_sized(0);
+    for (i, r) in reco.into_iter().enumerate() {
+        if i >= N_SHARDS {
+            shards2.shards[i - N_SHARDS] = r;
+        } else {
+            shards1.shards[i] = r;
+        }
+    }
+    (shards1, shards2)
+}
+
 fn data_to_dist(data: &[u8]) -> Vec<Vec<(u8, u8)>> {
     let mut res = vec![Vec::new(); N_SHARDS];
     for i in 0..data.len() / 2 {
@@ -558,6 +599,17 @@ fn data_index_to_chunk_index(index: usize) -> (usize, usize, usize) {
         a / (N_SHARDS * POINT_SIZE),
         b / POINT_SIZE,
     )
+}
+
+// ret index of dist 12 bytes.
+fn data_index_to_dist_index(index: usize) -> usize {
+    let (full_i, shard_i, shard_a) = data_index_to_chunk_index(index);
+    assert_eq!(shard_a, 0); // we run on aligned segment and this should only be use for segments
+                            // for now. TODO swith to index_segment instead of index?.
+    let i = full_i * 64 + shard_i * 2;
+    i / 12
+    //		let chunk_ix = i / 12;
+    //		let chunk_ix2 = i % 12;
 }
 
 // take n * 342 chunks and distribute by 12 byte subshards.
@@ -715,6 +767,61 @@ fn scenarii(data_chunks: usize) {
     let original4 = ori_chunk_to_data(&o_shards, a, Some(10));
     assert_eq!(original[a..], original3[0..original.len() * 1 / 4]);
     assert_eq!(original[a..a + 10], original4[0..10]);
+    let r_shards =
+        reed_solomon_simd::encode(N_SHARDS, 2 * N_SHARDS, o_shards.shards.iter()).unwrap();
+    let (r_shards1, r_shards2) = build_rec(r_shards);
+    let r_dist1 = r_shards1.to_dist();
+    let r_dist2 = r_shards2.to_dist();
+    assert_eq!(r_dist1.to_chunked(), r_shards1);
+    assert_eq!(r_dist2.to_chunked(), r_shards2);
+
+    // build single segment.
+    let segment_ix = data_chunks / 2;
+    let chunk_start = segment_ix * SEGMENT_SIZE_PADDED;
+    let chunk_start_i = data_index_to_chunk_index(chunk_start);
+    let chunk_end = (segment_ix + 1) * SEGMENT_SIZE_PADDED;
+    let chunk_end_i = data_index_to_chunk_index(chunk_start);
+    assert!(chunk_start_i.2 == 0);
+    assert!(chunk_end_i.2 == 0);
+
+    // TODO rebuild only from chunk index, or use orig size.
+    let l = o_dist.shards[0].len();
+    let mut o_dist_test = DistData::new(l * 12);
+
+    let dist_st = data_index_to_dist_index(chunk_start);
+    let dist_end = data_index_to_dist_index(chunk_end);
+    assert_eq!(dist_end - dist_st, 1);
+    for d in 0..N_SHARDS {
+        for i in dist_st..dist_end {
+            o_dist_test.shards[d][i] = o_dist.shards[d][i];
+        }
+    }
+    let o_shards_test = o_dist_test.to_chunked();
+    let mut ori_map: std::collections::BTreeMap<_, _> = o_shards_test
+        .shards
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (i, s.clone()))
+        .collect();
+    let ori_ret = reed_solomon_simd::decode(
+        N_SHARDS,
+        2 * N_SHARDS,
+        ori_map.iter().map(|(k, v)| (*k, v)),
+        [(0, ""); 0],
+    )
+    .unwrap();
+    assert_eq!(ori_ret.len(), 0);
+    ori_ret.into_iter().for_each(|(i, s)| {
+        ori_map.insert(i, s);
+    });
+    assert_eq!(ori_map.len(), N_SHARDS);
+    // TODO avoid instantiating this shards.
+    let shards = ChunkedData::from_decode(ori_map);
+    let ori_test = ori_chunk_to_data(&shards, chunk_start, Some(SEGMENT_SIZE_PADDED));
+    assert_eq!(original[chunk_start..chunk_end], ori_test);
+
+    // rebuild from all ori
+
     /*
                 panic!("d");
 
