@@ -453,9 +453,10 @@ fn ori_chunk_to_data(chunks: &ChunkedData, start_data: usize, data_len: Option<u
 
     let shards = &chunks.shards;
     let mut shard_i = 0;
-    let mut shard_i_offset = 0;
     let mut shard_a = 0;
     let mut full_i = 0;
+		let (mut full_i, mut shard_i, mut shard_a) = data_index_to_chunk_index(start_data);
+    let mut shard_i_offset = full_i * (N_POINT_BATCH * POINT_SIZE);
     loop {
         let l = shards[shard_a][shard_i_offset + shard_i];
         data.push(l);
@@ -636,7 +637,6 @@ fn scenarii(data_chunks: usize) {
     let (original, o_shards) = build_original(data_chunks, &mut rng, padded_segments);
         let original2 = ori_chunk_to_data(&o_shards, 0, None);
         assert_eq!(original[0..original.len()], original2[0..original.len()]);
-    /*
             let a = original.len() * 3 / 4;
             println!("a{:?} - {:?}", a, original.len());
         let original3 = ori_chunk_to_data(&o_shards, a, None);
@@ -649,6 +649,7 @@ fn scenarii(data_chunks: usize) {
             original[a..a + 10],
             original4[0..10]
         );
+    /*
 				panic!("d");
 
         let o_dist = chunks_to_dist(&o_shards);
