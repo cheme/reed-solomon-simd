@@ -339,6 +339,26 @@ const POINT_SIZE: usize = 2;
 const N_SHARDS: usize = 342;
 const N_POINT_BATCH: usize = 32;
 const SHARD_BATCH_SIZE: usize = N_POINT_BATCH * POINT_SIZE * N_SHARDS;
+// we run over 3 time 3 * 342 points.
+// So minimal unaligned size is 342 * 64 = 21888.
+// So minimal aligned size is 342 * 64 * 3 = 65664.
+// We want the aligned size to have chunk distribution to actual
+// indexes.
+// as restoring a single segment of 4k means 6 points amongst one redundant.
+// or amongst 2 redundant. Here max is 3 so we chunk al processes over thes 
+// 3 maximum cycle (bigger content do not make sense as they will be similarilly aligned).
+// TODO when restore content on smaller we can use CHUNK_SIZE of 64 or 64 * 2.
+const CHUNK_SIZE: usize = 64 * 3;
+// it is 16 segments.
+const CHUNK_SIZE_DATA: usize = 64 * 3 * N_SHARDS;
+
+struct ChunkedData {
+	shards: [Vec<u8>; N_SHARDS],
+}
+
+struct DistData {
+	shards: [Vec<[u8; 6]>; N_SHARDS],
+}
 
 fn build_original(
     original_data_segments: usize,
@@ -442,36 +462,87 @@ fn data_index_to_chunk_index(index: usize) -> (usize, usize, usize) {
     )
 }
 
-fn chunks_to_dist(chunks: &Vec<[u8; SHARD_BYTES]>) -> Vec<Vec<(u8, u8)>> {
+
+// take n * 342 chunks and distribute by 12 byte subshards.
+// To get distribution over 342 dest, the result subshards can be
+// split by its length / 342 as 342 chunks are processed sequentially.
+// If using same indexes, then list of subshards can be split by
+fn chunks_to_dist(chunks: &Vec<[u8; SHARD_BYTES]>) -> Vec<[u8; 12]> {
     // we want
     assert!(chunks.len() % N_SHARDS == 0);
-    let mut dists = vec![Vec::new(); N_SHARDS];
+		let mut res =Vec::new();
+		let mut sub_shard =[0u8; 12];
+		let mut sub_ix = 0;
     let nb_val_cycle = chunks.len() / N_SHARDS;
-    for c in 0..nb_val_cycle {
-        for v in 0..N_SHARDS {
-            let shard = &chunks[c * N_SHARDS + v];
-            for b in 0..SHARD_BYTES / 2 {
-                let point = (shard[b], shard[b + 32]);
-                dists[v].push(point);
-            }
-        }
-    }
-    dists
+		for v in 0..N_SHARDS {
+			for c in 0..nb_val_cycle {
+				let chunk = &chunks[c * N_SHARDS + v];
+
+				let mut chunk_ix = 0;
+				for chunk_ix in 0..SHARD_BYTES / 2 {
+					sub_shard[sub_ix] = chunk[chunk_ix];
+					sub_shard[sub_ix + 1] = chunk[chunk_ix + 32];
+					sub_ix += 2;
+					if sub_ix == 12 {
+						res.push(sub_shard);
+						sub_ix = 0;
+					}
+				}
+			}
+			if sub_ix != 0 {
+				for i in sub_ix..12 {
+					// buff is not reset
+					sub_shard[i] = 0;
+				}
+				res.push(sub_shard);
+			}
+		}
+		assert_eq!(res.len() % N_SHARDS, 0);
+		println!("dist {:?}", (chunks.len() * SHARD_BYTES, res.len() * 12));
+		res
 }
-fn chunks_to_dist2(chunks: &[Vec<u8>]) -> Vec<Vec<(u8, u8)>> {
+
+// ?? more clear when testing.
+fn chunk_dist_at(dists: &[[u8; 12]], at: usize) -> &[u8; 12] {
+	let step = dists.len() / N_SHARDS;
+	let at_step = at / step;
+	let at_step2 = at % step;
+	&dists[at_step * 342 + at_step2]
+}
+
+fn chunks_to_dist2(chunks: &[Vec<u8>]) -> Vec<[u8; 12]> {
+    // we want
     assert!(chunks.len() % N_SHARDS == 0);
-    let mut dists = vec![Vec::new(); N_SHARDS];
+		let mut res =Vec::new();
+		let mut sub_shard =[0u8; 12];
+		let mut sub_ix = 0;
     let nb_val_cycle = chunks.len() / N_SHARDS;
-    for c in 0..nb_val_cycle {
-        for v in 0..N_SHARDS {
-            let shard = &chunks[c * N_SHARDS + v];
-            for b in 0..SHARD_BYTES / 2 {
-                let point = (shard[b], shard[b + 32]);
-                dists[v].push(point);
-            }
-        }
-    }
-    dists
+		for v in 0..N_SHARDS {
+			for c in 0..nb_val_cycle {
+				let chunk = &chunks[c * N_SHARDS + v];
+
+				let mut chunk_ix = 0;
+				for chunk_ix in 0..SHARD_BYTES / 2 {
+					sub_shard[sub_ix] = chunk[chunk_ix];
+					sub_shard[sub_ix + 1] = chunk[chunk_ix + 32];
+					sub_ix += 2;
+					if sub_ix == 12 {
+						res.push(sub_shard);
+						sub_ix = 0;
+					}
+				}
+			}
+			if sub_ix != 0 {
+				for i in sub_ix..12 {
+					// buff is not reset
+					sub_shard[i] = 0;
+				}
+				res.push(sub_shard);
+			}
+		}
+		assert_eq!(res.len() % N_SHARDS, 0);
+		println!("dist {:?}", (chunks.len() * SHARD_BYTES, res.len() * 12));
+		res
 }
 
 /*
@@ -525,6 +596,8 @@ fn scenarii(data_chunks: usize) {
 														// or make things rather awkward.
 														// Meaning all segment of a package being sent to same validator
 														// distribution (likely dist is fix on an epoch so fine?).
+														// generally this is a must have: otherwhise difficult combination.
+
     let mut rng = SmallRng::from_seed([0; 32]);
     let (original, o_shards) = build_original(data_chunks, &mut rng, padded_segments);
     let original2 = ori_chunk_to_data(&o_shards, 0, None);
@@ -547,8 +620,27 @@ fn scenarii(data_chunks: usize) {
     let r_shards = reed_solomon_simd::encode(count, 2 * count, &o_shards).unwrap();
     let r_dist1 = chunks_to_dist2(&r_shards[..r_shards.len() / 2]);
     let r_dist2 = chunks_to_dist2(&r_shards[r_shards.len() / 2..]);
+		assert_eq!(o_dist.len(), r_dist1.len());
     println!("o data size: {:?}", original.len());
     println!("o sharded size: {:?}", o_shards.len() * SHARD_BYTES);
+		// test a single segment reco.
+		let segment_ix = data_chunks / 2;
+
+		let chunk_start = segment_ix * SEGMENT_SIZE_PADDED;
+		let chunk_start_i = data_index_to_chunk_index(chunk_start);
+		let chunk_end = (segment_ix + 1) * SEGMENT_SIZE_PADDED;
+		let chunk_end_i = data_index_to_chunk_index(chunk_start);
+		assert!(chunk_start_i.2 == 0);
+		assert!(chunk_end_i.2 == 0);
+		/*
+		let mut oris = BTreeMap::new();
+		for v in 0..342 {
+		}
+		*/
+
+		// reco from ori
+
+
     /*
     let count = o_shards.len();
     let r_shards = reed_solomon_simd::encode(count, 2 * count, &o_shards).unwrap();
