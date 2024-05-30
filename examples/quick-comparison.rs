@@ -395,7 +395,7 @@ fn data_to_dist(data: &[u8]) -> Vec<Vec<(u8, u8)>> {
 fn ori_chunk_to_data(
     chunks: &Vec<[u8; SHARD_BYTES]>,
     start_data: usize,
-    end_data: usize,
+    data_len: Option<usize>,
 ) -> Vec<u8> {
     let mut data = Vec::new();
     assert!(chunks.len() % N_SHARDS == 0);
@@ -409,6 +409,9 @@ fn ori_chunk_to_data(
         let r = chunks[full_i_offset + shard_a][32 + shard_i];
         data.push(l);
         data.push(r);
+				if data_len.map(|m| data.len() >= m).unwrap_or(false) {
+					break;
+				}
         shard_a += 1;
         if shard_a % N_SHARDS == 0 {
             shard_i += 1;
@@ -505,29 +508,40 @@ fn reco_to_dist(reco: &[Vec<u8>]) -> Vec<Vec<(u8, u8)>> {
 */
 
 fn scenarii(data_chunks: usize) {
-	/*
 	let mut s = 0;
 	for _ in 0..100 {
-		s += 4096; // 7 point and in theory rarely 6
-		//s += 4104; exact 6 point
+		//s += 4096; // 7 point and in theory rarely 6
+		s += 4104; // exact 6 point
 		let i = data_index_to_chunk_index(s);
 
 		println!("ax{:?}", i);
 	}
 	panic!("done");
-	*/
-		let padded_segments = false;
+		let padded_segments = true; // keep it this way for simple distribution.(6poinst of the 342.
+																// Even if some time on two 742 dist and some time even on 2
+																// batches.
+														// !! CHEME: this distribution will force
+														// validator to have same chunks (all 64 bytes).
+														// or make things rather awkward.
+														// Meaning all segment of a package being sent to same validator
+														// distribution (likely dist is fix on an epoch so fine?).
     let mut rng = SmallRng::from_seed([0; 32]);
     let (original, o_shards) = build_original(data_chunks, &mut rng, padded_segments);
-    let original2 = ori_chunk_to_data(&o_shards, 0, 0);
+    let original2 = ori_chunk_to_data(&o_shards, 0, None);
     assert_eq!(original[0..original.len()], original2[0..original.len()]);
 		let a = original.len() * 3 / 4;
 		println!("a{:?} - {:?}", a, original.len());
-    let original3 = ori_chunk_to_data(&o_shards, a, 0);
+    let original3 = ori_chunk_to_data(&o_shards, a, None);
+    let original4 = ori_chunk_to_data(&o_shards, a, Some(10));
     assert_eq!(
         original[a..],
         original3[0..original.len() * 1 / 4]
     );
+    assert_eq!(
+        original[a..a + 10],
+        original4[0..10]
+    );
+
     let o_dist = chunks_to_dist(&o_shards);
     let count = o_shards.len();
     let r_shards = reed_solomon_simd::encode(count, 2 * count, &o_shards).unwrap();
