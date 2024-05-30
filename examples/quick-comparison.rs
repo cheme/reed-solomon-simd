@@ -769,7 +769,7 @@ fn scenarii(data_chunks: usize) {
     assert_eq!(original[a..a + 10], original4[0..10]);
     let r_shards =
         reed_solomon_simd::encode(N_SHARDS, 2 * N_SHARDS, o_shards.shards.iter()).unwrap();
-    let (r_shards1, r_shards2) = build_rec(r_shards);
+    let (r_shards1, r_shards2) = build_rec(r_shards.clone());
     let r_dist1 = r_shards1.to_dist();
     let r_dist2 = r_shards2.to_dist();
     assert_eq!(r_dist1.to_chunked(), r_shards1);
@@ -791,6 +791,8 @@ fn scenarii(data_chunks: usize) {
     let dist_st = data_index_to_dist_index(chunk_start);
     let dist_end = data_index_to_dist_index(chunk_end);
     assert_eq!(dist_end - dist_st, 1);
+
+    // from ori
     for d in 0..N_SHARDS {
         for i in dist_st..dist_end {
             o_dist_test.shards[d][i] = o_dist.shards[d][i];
@@ -820,7 +822,122 @@ fn scenarii(data_chunks: usize) {
     let ori_test = ori_chunk_to_data(&shards, chunk_start, Some(SEGMENT_SIZE_PADDED));
     assert_eq!(original[chunk_start..chunk_end], ori_test);
 
-    // rebuild from all ori
+    // from first half red
+    let mut o_dist_test = DistData::new(l * 12);
+    let mut r_dist_test1 = DistData::new(l * 12);
+    for d in 0..N_SHARDS {
+        for i in dist_st..dist_end {
+            r_dist_test1.shards[d][i] = r_dist1.shards[d][i];
+        }
+    }
+    let o_shards_test = o_dist_test.to_chunked();
+    let r_shards_test1 = r_dist_test1.to_chunked();
+    let mut ori_map: std::collections::BTreeMap<_, _> = Default::default();
+    let ori_ret = reed_solomon_simd::decode(
+        N_SHARDS,
+        2 * N_SHARDS,
+        ori_map.iter().map(|(k, v)| (*k, v)),
+        //r_shards.iter().enumerate(),
+        //r_shards1.shards.iter().enumerate(),
+        r_shards_test1.shards.iter().enumerate(),
+    )
+    .unwrap();
+    assert_eq!(ori_ret.len(), N_SHARDS);
+    ori_ret.into_iter().for_each(|(i, s)| {
+        ori_map.insert(i, s);
+    });
+    assert_eq!(ori_map.len(), N_SHARDS);
+    // TODO avoid instantiating this shards.
+    let shards = ChunkedData::from_decode(ori_map);
+    let ori_test = ori_chunk_to_data(&shards, chunk_start, Some(SEGMENT_SIZE_PADDED));
+    assert_eq!(original[chunk_start..chunk_end], ori_test);
+
+    // from second half red
+    let mut o_dist_test = DistData::new(l * 12);
+    let mut r_dist_test2 = DistData::new(l * 12);
+    for d in 0..N_SHARDS {
+        for i in dist_st..dist_end {
+            r_dist_test2.shards[d][i] = r_dist2.shards[d][i];
+        }
+    }
+    let o_shards_test = o_dist_test.to_chunked();
+    let r_shards_test2 = r_dist_test2.to_chunked();
+    let mut ori_map: std::collections::BTreeMap<_, _> = Default::default();
+    let ori_ret = reed_solomon_simd::decode(
+        N_SHARDS,
+        2 * N_SHARDS,
+        ori_map.iter().map(|(k, v)| (*k, v)),
+        //r_shards.iter().enumerate(),
+        //r_shards1.shards.iter().enumerate(),
+        r_shards_test2
+            .shards
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (i + N_SHARDS, s)),
+    )
+    .unwrap();
+    assert_eq!(ori_ret.len(), N_SHARDS);
+    ori_ret.into_iter().for_each(|(i, s)| {
+        ori_map.insert(i, s);
+    });
+    assert_eq!(ori_map.len(), N_SHARDS);
+    // TODO avoid instantiating this shards.
+    let shards = ChunkedData::from_decode(ori_map);
+    let ori_test = ori_chunk_to_data(&shards, chunk_start, Some(SEGMENT_SIZE_PADDED));
+    assert_eq!(original[chunk_start..chunk_end], ori_test);
+
+    // from 33% mix
+    let mut o_dist_test = DistData::new(l * 12);
+    let mut r_dist_test1 = DistData::new(l * 12);
+    let mut r_dist_test2 = DistData::new(l * 12);
+    for d in 0..N_SHARDS / 3 {
+        for i in dist_st..dist_end {
+            o_dist_test.shards[d][i] = o_dist.shards[d][i];
+            r_dist_test1.shards[d][i] = r_dist1.shards[d][i];
+            r_dist_test2.shards[d][i] = r_dist2.shards[d][i];
+        }
+    }
+    let o_shards_test = o_dist_test.to_chunked();
+    let r_shards_test1 = r_dist_test1.to_chunked();
+    let r_shards_test2 = r_dist_test2.to_chunked();
+    let mut ori_map: std::collections::BTreeMap<_, _> = o_shards_test
+        .shards
+        .iter()
+        .take(N_SHARDS / 3)
+        .enumerate()
+        .map(|(i, s)| (i, s.clone()))
+        .collect();
+    assert_eq!(ori_map.len(), N_SHARDS / 3);
+    let ori_ret = reed_solomon_simd::decode(
+        N_SHARDS,
+        2 * N_SHARDS,
+        ori_map.iter().map(|(k, v)| (*k, v)),
+        //r_shards.iter().enumerate(),
+        //r_shards1.shards.iter().enumerate(),
+        r_shards_test1
+            .shards
+            .iter()
+            .take(N_SHARDS / 3)
+            .enumerate()
+            .chain(
+                r_shards_test2
+                    .shards
+                    .iter()
+                    .take(N_SHARDS / 3)
+                    .enumerate()
+                    .map(|(i, s)| (i + N_SHARDS, s)),
+            ),
+    )
+    .unwrap();
+    assert_eq!(ori_ret.len(), N_SHARDS / 3 * 2);
+    ori_ret.into_iter().for_each(|(i, s)| {
+        ori_map.insert(i, s);
+    });
+    assert_eq!(ori_map.len(), N_SHARDS);
+    // TODO avoid instantiating this shards.
+    let shards = ChunkedData::from_decode(ori_map);
+    let ori_test = ori_chunk_to_data(&shards, chunk_start, Some(SEGMENT_SIZE_PADDED));
+    assert_eq!(original[chunk_start..chunk_end], ori_test);
 
     /*
                 panic!("d");
