@@ -333,6 +333,7 @@ fn test_reed_solomon_novelpoly(count: usize) {
 
 const SEGMENT_SIZE: usize = 4096;
 const SEGMENT_SIZE_PADDING: usize = 8;
+const SEGMENT_SIZE_PADDED: usize = SEGMENT_SIZE + SEGMENT_SIZE_PADDING;
 const NB_POINT_PER_SEGMENTS: usize = (SEGMENT_SIZE + SEGMENT_SIZE_PADDING) / N_SHARDS / POINT_SIZE; // 6
 const POINT_SIZE: usize = 2;
 const N_SHARDS: usize = 342;
@@ -342,8 +343,10 @@ const SHARD_BATCH_SIZE: usize = N_POINT_BATCH * POINT_SIZE * N_SHARDS;
 fn build_original(
     original_data_segments: usize,
     rng: &mut SmallRng,
+		padded: bool,
 ) -> (Vec<u8>, Vec<[u8; SHARD_BYTES]>) {
-    let mut original = vec![0; original_data_segments * SEGMENT_SIZE];
+	let segment_size = if padded { SEGMENT_SIZE_PADDED } else { SEGMENT_SIZE };
+    let mut original = vec![0; original_data_segments * segment_size];
     rng.fill::<[u8]>(&mut original);
 
     // every 2 byte chunks get in a point of SHARDBYTES. (losing a few byte, can be optimize later it is
@@ -351,7 +354,7 @@ fn build_original(
 
     // So for testing best perf have original data chunks multiple of 32.
     let number_shards_batch =
-        (((original_data_segments * SEGMENT_SIZE) - 1) / SHARD_BATCH_SIZE) + 1;
+        (((original_data_segments * segment_size) - 1) / SHARD_BATCH_SIZE) + 1;
 
     println!("x{:?}", number_shards_batch);
     let mut shards = vec![[0u8; SHARD_BYTES]; number_shards_batch * N_SHARDS];
@@ -502,8 +505,20 @@ fn reco_to_dist(reco: &[Vec<u8>]) -> Vec<Vec<(u8, u8)>> {
 */
 
 fn scenarii(data_chunks: usize) {
+	/*
+	let mut s = 0;
+	for _ in 0..100 {
+		s += 4096; // 7 point and in theory rarely 6
+		//s += 4104; exact 6 point
+		let i = data_index_to_chunk_index(s);
+
+		println!("ax{:?}", i);
+	}
+	panic!("done");
+	*/
+		let padded_segments = false;
     let mut rng = SmallRng::from_seed([0; 32]);
-    let (original, o_shards) = build_original(data_chunks, &mut rng);
+    let (original, o_shards) = build_original(data_chunks, &mut rng, padded_segments);
     let original2 = ori_chunk_to_data(&o_shards, 0, 0);
     assert_eq!(original[0..original.len()], original2[0..original.len()]);
 		let a = original.len() * 3 / 4;
