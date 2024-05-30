@@ -352,29 +352,33 @@ const CHUNK_SIZE: usize = 64 * 3;
 // it is 16 segments.
 const CHUNK_SIZE_DATA: usize = 64 * 3 * N_SHARDS;
 
+#[derive(Debug, PartialEq, Eq)]
 struct ChunkedData {
     // Vec<u8> is n time 64 byte shard (must be aligned).
     shards: [Vec<u8>; N_SHARDS],
+    // TODO store last indexes of relevant data to be able to limit
+    // dist size.
 }
 
 impl ChunkedData {
     fn init(original_size: usize) -> Self {
         // So for testing best perf have original data chunks multiple of 32.
+        debug_assert!(original_size % N_SHARDS == 0); // size from padded segments.
+        let size_per_dist = original_size / N_SHARDS;
+        let size_per_dist = ((size_per_dist - 1) / 64) + 1;
+        println!("spd{:?}", (size_per_dist, size_per_dist * 64));
+        Self::init_sized(size_per_dist)
+    }
 
-				debug_assert!(original_size % N_SHARDS == 0); // size from padded segments. 
-				let size_per_dist = original_size / N_SHARDS;
-				let size_per_dist = ((size_per_dist - 1) / 64) + 1;
-
-				println!("spd{:?}", (size_per_dist, size_per_dist * 64));
+    fn init_sized(size_per_dist: usize) -> Self {
         let mut shards: [MaybeUninit<Vec<u8>>; N_SHARDS] =
             unsafe { MaybeUninit::uninit().assume_init() };
 
-				let mut tot_size = 0;
+        let mut tot_size = 0;
         for i in 0..N_SHARDS {
             shards[i].write(vec![0; size_per_dist * 64]);
-						tot_size += size_per_dist * 64;
+            tot_size += size_per_dist * 64;
         }
-				println!("ori: {}, chunked: {}", original_size, tot_size);
         unsafe {
             ChunkedData {
                 shards: std::mem::transmute(shards),
@@ -382,18 +386,78 @@ impl ChunkedData {
         }
     }
 
-
     fn n_full(&self) -> usize {
         self.shards[0].len() / (N_POINT_BATCH * POINT_SIZE)
+    }
+
+    fn to_dist(&self) -> DistData {
+        let nb = ((self.shards[0].len() - 1) / 12) + 1;
+        let mut dist: [MaybeUninit<Vec<[u8; 12]>>; N_SHARDS] =
+            unsafe { MaybeUninit::uninit().assume_init() };
+
+        for i in 0..N_SHARDS {
+            let mut d = vec![[0; 12]; nb];
+            let mut ix = 0;
+            let mut ix2 = 0;
+            for chunk in self.shards[i].chunks_exact(64) {
+                for a in 0..32 {
+                    let p = (chunk[a], chunk[a + 32]);
+                    d[ix][ix2] = p.0;
+                    d[ix][ix2 + 1] = p.1;
+                    ix2 += 2;
+                    if ix2 == 12 {
+                        ix2 = 0;
+                        ix += 1;
+                    }
+                }
+            }
+            dist[i].write(d);
+            //assert_eq!(ix, nb); not true, some padding
+        }
+        unsafe {
+            DistData {
+                shards: std::mem::transmute(dist),
+            }
+        }
     }
 }
 
 struct DistData {
     // earch Vec<[u8; 6]> is a segment index.
     // so we indeed have each segment amongs N_SHARDS.
-    shards: [Vec<[u8; 6]>; N_SHARDS],
+    shards: [Vec<[u8; 12]>; N_SHARDS],
 }
 
+impl DistData {
+    fn to_chunked(&self) -> ChunkedData {
+        // do not round up (we already pad dist data so chunked data is lower)
+        let chunk_len = self.shards[0].len() * 12 / 64;
+
+        let mut shards = ChunkedData::init_sized(chunk_len).shards;
+        for dest in 0..N_SHARDS {
+            //			println!("{:?}", self.shards[dest]);
+            let mut ch_ix = 0;
+            let mut ix = 0;
+            for (i, c) in self.shards[dest].iter().enumerate() {
+                for b in 0..6 {
+                    if ix == 32 {
+                        ix = 0;
+                        ch_ix += 1;
+                    }
+                    let b = b * 2;
+                    //			println!("{:?}", (ch_ix * 64 + ix, b, c[b]));
+                    shards[dest].get_mut(ch_ix * 64 + ix).map(|s| *s = c[b]);
+                    shards[dest]
+                        .get_mut(ch_ix * 64 + ix + 32)
+                        .map(|s| *s = c[b + 1]);
+                    ix += 1;
+                }
+            }
+            //			panic!("d{:?}", shards[dest]);
+        }
+        ChunkedData { shards }
+    }
+}
 fn build_original(
     original_data_segments: usize,
     rng: &mut SmallRng,
@@ -419,7 +483,7 @@ fn build_original(
     for i_p in 0..original.len() / 2 {
         //		println!("{}: {} {} {} {} {}", i_p, number_shards_batch, original.len(), SHARD_BATCH_SIZE * number_shards_batch, shard_a, original.len()/2);
         let point = (original[i_p * 2], original[i_p * 2 + 1]);
-//				println!("{:?}", (i_p, original.len() / 2));
+        //				println!("{:?}", (i_p, original.len() / 2));
         shards[shard_a][shard_i_offset + shard_i] = point.0;
         shards[shard_a][shard_i_offset + 32 + shard_i] = point.1;
         shard_a += 1;
@@ -449,13 +513,13 @@ fn data_to_dist(data: &[u8]) -> Vec<Vec<(u8, u8)>> {
 fn ori_chunk_to_data(chunks: &ChunkedData, start_data: usize, data_len: Option<usize>) -> Vec<u8> {
     let mut data = Vec::new(); // TODO capacity.
     let n_full = chunks.n_full();
-				println!("spb{}", n_full * 64);
+    println!("spb{}", n_full * 64);
 
     let shards = &chunks.shards;
     let mut shard_i = 0;
     let mut shard_a = 0;
     let mut full_i = 0;
-		let (mut full_i, mut shard_i, mut shard_a) = data_index_to_chunk_index(start_data);
+    let (mut full_i, mut shard_i, mut shard_a) = data_index_to_chunk_index(start_data);
     let mut shard_i_offset = full_i * (N_POINT_BATCH * POINT_SIZE);
     loop {
         let l = shards[shard_a][shard_i_offset + shard_i];
@@ -612,7 +676,7 @@ fn reco_to_dist(reco: &[Vec<u8>]) -> Vec<Vec<(u8, u8)>> {
 */
 
 fn scenarii(data_chunks: usize) {
-	/*
+    /*
     let mut s = 0;
     for _ in 0..100 {
         //s += 4096; // 7 point and in theory rarely 6
@@ -622,7 +686,7 @@ fn scenarii(data_chunks: usize) {
         println!("ax{:?}", i);
     }
     panic!("done");
-		*/
+        */
     let padded_segments = true; // keep it this way for simple distribution.(6poinst of the 342.
                                 // Even if some time on two 742 dist and some time even on 2
                                 // batches.
@@ -635,22 +699,24 @@ fn scenarii(data_chunks: usize) {
 
     let mut rng = SmallRng::from_seed([0; 32]);
     let (original, o_shards) = build_original(data_chunks, &mut rng, padded_segments);
-        let original2 = ori_chunk_to_data(&o_shards, 0, None);
-        assert_eq!(original[0..original.len()], original2[0..original.len()]);
-            let a = original.len() * 3 / 4;
-            println!("a{:?} - {:?}", a, original.len());
-        let original3 = ori_chunk_to_data(&o_shards, a, None);
-        let original4 = ori_chunk_to_data(&o_shards, a, Some(10));
-        assert_eq!(
-            original[a..],
-            original3[0..original.len() * 1 / 4]
-        );
-        assert_eq!(
-            original[a..a + 10],
-            original4[0..10]
-        );
+    let o_dist = o_shards.to_dist();
+    let o_shards2 = o_dist.to_chunked();
+    assert_eq!(o_shards.shards.len(), o_shards2.shards.len());
+    //		println!("{:?}", o_dist.shards[0].len() * 12);
+    //		println!("{:?}", o_dist.shards[0]);
+    assert_eq!(o_shards.shards[0].len(), o_shards2.shards[0].len());
+    assert_eq!(o_shards.shards[0], o_shards2.shards[0]);
+    assert_eq!(o_shards, o_shards2);
+    let original2 = ori_chunk_to_data(&o_shards, 0, None);
+    assert_eq!(original[0..original.len()], original2[0..original.len()]);
+    let a = original.len() * 3 / 4;
+    println!("a{:?} - {:?}", a, original.len());
+    let original3 = ori_chunk_to_data(&o_shards, a, None);
+    let original4 = ori_chunk_to_data(&o_shards, a, Some(10));
+    assert_eq!(original[a..], original3[0..original.len() * 1 / 4]);
+    assert_eq!(original[a..a + 10], original4[0..10]);
     /*
-				panic!("d");
+                panic!("d");
 
         let o_dist = chunks_to_dist(&o_shards);
         let count = o_shards.len();
