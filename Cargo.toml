@@ -20,6 +20,8 @@ include = [
 bytemuck = "1.7.3"
 fixedbitset = "0.4.0"
 once_cell = "1.8.0"
+scale = { package = "parity-scale-codec", version = "3.6.9", default-features = false,  features = ["derive"] }
+thiserror = { version = "1.0.56", default-features = false }
 
 [build-dependencies]
 readme-rustdocifier = "0.1.0"
