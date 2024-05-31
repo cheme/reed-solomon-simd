@@ -990,281 +990,384 @@ struct RecoConf {
     favor_reco: bool, // otherwhise we go first on the originals.
 }
 
-
 mod ec {
 
-//! This library provides methods for encoding the data into chunks and
-//! reconstructing the original data from chunks as well as verifying
-//! individual chunks against an erasure root.
+    //! This library provides methods for encoding the data into chunks and
+    //! reconstructing the original data from chunks as well as verifying
+    //! individual chunks against an erasure root.
 
-//mod error;
-//mod merklize;
+    //mod error;
+    //mod merklize;
 
-//pub use self::{
-	//error::Error,
-	//merklize::{ErasureRoot, MerklizedChunks, Proof},
-//};
+    //pub use self::{
+    //error::Error,
+    //merklize::{ErasureRoot, MerklizedChunks, Proof},
+    //};
 
-use thiserror::Error;
-use scale::{Decode, Encode};
-use std::ops::AddAssign;
-use reed_solomon_simd as reed_solomon;
-use std::collections::BTreeMap;
+    use super::ChunkedData;
+    use reed_solomon_simd as reed_solomon;
+    use scale::{Decode, Encode};
+    use std::collections::BTreeMap;
+    use std::ops::AddAssign;
+    use thiserror::Error;
 
+    pub const MAX_CHUNKS: u16 = 16384;
 
-pub const MAX_CHUNKS: u16 = 16384;
+    // The reed-solomon library requires each shards to be 64 bytes aligned.
+    const CHUNKS_ALIGNMENT: usize = 64;
+    const N_POINT_BATCH: usize = CHUNKS_ALIGNMENT / SIZE_POINT;
+    // The reed-solomon library requires each shards to be 64 bytes aligned.
+    const CHUNKS_MIN_SHARD: usize = CHUNKS_ALIGNMENT;
 
-// The reed-solomon library requires each shards to be 64 bytes aligned.
-const CHUNKS_ALIGNMENT: usize = 64;
+    // The number of chunk of data needed to rebuild.
+    const N_CHUNKS: usize = 342;
 
-// The reed-solomon library requires each shards to be 64 bytes aligned.
-const CHUNKS_MIN_SHARD: usize = CHUNKS_ALIGNMENT;
+    // The number of time the erasure coded chunk we want.
+    const N_REDUNDANCY: usize = 2;
 
-// The number of chunk of data needed to rebuild.
-const N_CHUNKS: usize = 342;
+    // Total of chunks, original and recovery, as will be distributed.
+    const TOTAL_CHUNKS: usize = N_CHUNKS * (1 + N_REDUNDANCY);
 
-// The number of time the erasure coded chunk we want.
-const N_REDUNDANCY: usize = 2;
+    // Data chunked int o N_CHUNK need to be this big.
+    const MIN_CHUNKED_DATA_SIZE: usize = N_CHUNKS * CHUNKS_MIN_SHARD; // 21_888
 
-// Total of chunks, original and recovery, as will be distributed.
-const TOTAL_CHUNKS: usize = N_CHUNKS * (1 + N_REDUNDANCY);
+    // 3 * 12 is aligned with 64
+    const SUBSHARD_BATCH_MUL: usize = 3;
 
-// Data chunked int o N_CHUNK need to be this big.
-const MIN_CHUNKED_DATA_SIZE: usize = N_CHUNKS * CHUNKS_MIN_SHARD; // 21_888
+    // 3 time 64 aligned subshard batch.
+    const SEGMENTS_PER_SUBSHARD_BATCH_OPTIMAL: usize =
+        SUBSHARD_BATCH_MUL * CHUNKS_MIN_SHARD / SUBSHARD_SIZE; // 16
 
-// 3 * 12 is aligned with 64
-const SUBSHARD_BATCH_MUL: usize = 3;
+    const MAX_SUB_OPTIMAL_SIZE_DATA: usize = SEGMENTS_PER_SUBSHARD_BATCH_OPTIMAL * SEGMENT_SIZE;
+    //
+    const SIZE_SUBSHARD_BATCH_OPTIMAL: usize = MIN_CHUNKED_DATA_SIZE * SUBSHARD_BATCH_MUL; // 65664 (mod12 = 0) and (mod 21888 = 0)
 
-// 3 time 64 aligned subshard batch.
-const SEGMENTS_PER_SUBSHARD_BATCH_OPTIMAL: usize = SUBSHARD_BATCH_MUL * CHUNKS_MIN_SHARD / SUBSHARD_SIZE; // 16
+    // Segement of data that is part of a bigger content.
+    const SEGMENT_SIZE: usize = 4096;
 
-// 
-const SIZE_SUBSHARD_BATCH_OPTIMAL: usize = MIN_CHUNKED_DATA_SIZE * SUBSHARD_BATCH_MUL; // 65664 (mod12 = 0) and (mod 21888 = 0)
+    // Segment size with added padding to allow being
+    // erasure coded in batch while staying on same points indexes.
+    const SEGMENT_SIZE_ALIGNED: usize = SUBSHARD_PER_SEGMENT * SUBSHARD_SIZE; // 4104 byte
 
-// Segement of data that is part of a bigger content.
-const SEGMENT_SIZE: usize = 4096;
+    const SUBSHARD_PER_SEGMENT: usize = ((SEGMENT_SIZE - 1) / SUBSHARD_SIZE) + 1;
 
-// Segment size with added padding to allow being
-// erasure coded in batch while staying on same points indexes.
-const SEGMENT_SIZE_ALIGNED: usize = SUBSHARD_PER_SEGMENT * SUBSHARD_SIZE; // 4104 byte
+    const SIZE_POINT: usize = 2; // gf16
 
-const SUBSHARD_PER_SEGMENT: usize = ((SEGMENT_SIZE - 1) / SUBSHARD_SIZE) + 1;
+    const SUBSHARD_SIZE: usize = SIZE_POINT * SUBSHARD_POINTS; // 12bytes
 
-const SIZE_POINT: usize = 2; // gf16
+    const SUBSHARD_POINTS: usize = 6;
 
-const SUBSHARD_SIZE: usize = SIZE_POINT * SUBSHARD_POINTS; // 12bytes
+    /// Proof of an erasure chunk which can be verified against [`ErasureRoot`]. TODO @cheme get the
+    /// one from merklized of andronik dep
+    #[derive(PartialEq, Eq, Clone, Debug, Encode, Decode)]
+    pub struct Proof(Vec<u8>);
+    /// Errors in erasure coding. TODO rem (is in module)
+    #[derive(Debug, Clone, PartialEq, Error)]
+    #[non_exhaustive]
+    pub enum Error {
+        #[error("There are too many chunks in total")]
+        TooManyTotalChunks,
+        #[error("Expected at least 1 chunk")]
+        NotEnoughTotalChunks,
+        #[error("Not enough chunks to reconstruct message")]
+        NotEnoughChunks,
+        #[error("Chunks are not uniform, mismatch in length or are zero sized")]
+        NonUniformChunks,
+        #[error("Unaligned chunk length")]
+        UnalignedChunk,
+        #[error("Chunk is out of bounds: {chunk_index} not included in 0..{n_chunks}")]
+        ChunkIndexOutOfBounds { chunk_index: u16, n_chunks: u16 },
+        #[error("Reconstructed payload invalid")]
+        BadPayload,
+        #[error("Invalid chunk proof")]
+        InvalidChunkProof,
+        #[error("The proof is too large")]
+        TooLargeProof,
+        #[error("Unexpected behavior of the reed-solomon library")]
+        Bug,
+        #[error("An unknown error has appeared when (re)constructing erasure code chunks")]
+        Unknown,
+    }
+    //TODO rem
+    impl From<reed_solomon::Error> for Error {
+        fn from(error: reed_solomon::Error) -> Self {
+            use reed_solomon::Error::*;
 
-const SUBSHARD_POINTS: usize = 6;
+            match error {
+                NotEnoughShards { .. } => Self::NotEnoughChunks,
+                InvalidShardSize { .. } => Self::UnalignedChunk,
+                TooManyOriginalShards { .. } => Self::TooManyTotalChunks,
+                TooFewOriginalShards { .. } => Self::NotEnoughTotalChunks,
+                DifferentShardSize { .. } => Self::NonUniformChunks,
+                _ => Self::Unknown,
+            }
+        }
+    }
 
-/// Proof of an erasure chunk which can be verified against [`ErasureRoot`]. TODO @cheme get the
-/// one from merklized of andronik dep
-#[derive(PartialEq, Eq, Clone, Debug, Encode, Decode)]
-pub struct Proof(Vec<u8>);
-/// Errors in erasure coding. TODO rem (is in module)
-#[derive(Debug, Clone, PartialEq, Error)]
-#[non_exhaustive]
-pub enum Error {
-	#[error("There are too many chunks in total")]
-	TooManyTotalChunks,
-	#[error("Expected at least 1 chunk")]
-	NotEnoughTotalChunks,
-	#[error("Not enough chunks to reconstruct message")]
-	NotEnoughChunks,
-	#[error("Chunks are not uniform, mismatch in length or are zero sized")]
-	NonUniformChunks,
-	#[error("Unaligned chunk length")]
-	UnalignedChunk,
-	#[error("Chunk is out of bounds: {chunk_index} not included in 0..{n_chunks}")]
-	ChunkIndexOutOfBounds { chunk_index: u16, n_chunks: u16 },
-	#[error("Reconstructed payload invalid")]
-	BadPayload,
-	#[error("Invalid chunk proof")]
-	InvalidChunkProof,
-	#[error("The proof is too large")]
-	TooLargeProof,
-	#[error("Unexpected behavior of the reed-solomon library")]
-	Bug,
-	#[error("An unknown error has appeared when (re)constructing erasure code chunks")]
-	Unknown,
-}
-//TODO rem
-impl From<reed_solomon::Error> for Error {
-	fn from(error: reed_solomon::Error) -> Self {
-		use reed_solomon::Error::*;
+    /// The index of an erasure chunk.
+    /// Chunk indexes are split into `N_CHUNKS` original piece of data, and `N_REDUNDANCY`
+    /// Original chunk will be in the first `N_CHUNKS` indicies, redundancy will be the next
+    /// ones batches by `N_CHUNKS` sequence (this redundancy sequence is not strictly
+    /// usefull but can be use to extract subchunks.
+    #[derive(Eq, Ord, PartialEq, PartialOrd, Copy, Clone, Encode, Decode, Hash, Debug)]
+    pub struct ChunkIndex(pub u16);
 
-		match error {
-			NotEnoughShards { .. } => Self::NotEnoughChunks,
-			InvalidShardSize { .. } => Self::UnalignedChunk,
-			TooManyOriginalShards { .. } => Self::TooManyTotalChunks,
-			TooFewOriginalShards { .. } => Self::NotEnoughTotalChunks,
-			DifferentShardSize { .. } => Self::NonUniformChunks,
-			_ => Self::Unknown,
-		}
-	}
-}
+    impl From<u16> for ChunkIndex {
+        fn from(n: u16) -> Self {
+            ChunkIndex(n)
+        }
+    }
 
-/// The index of an erasure chunk.
-/// Chunk indexes are split into `N_CHUNKS` original piece of data, and `N_REDUNDANCY`
-/// Original chunk will be in the first `N_CHUNKS` indicies, redundancy will be the next
-/// ones batches by `N_CHUNKS` sequence (this redundancy sequence is not strictly
-/// usefull but can be use to extract subchunks.
-#[derive(Eq, Ord, PartialEq, PartialOrd, Copy, Clone, Encode, Decode, Hash, Debug)]
-pub struct ChunkIndex(pub u16);
+    impl AddAssign<u16> for ChunkIndex {
+        fn add_assign(&mut self, rhs: u16) {
+            self.0 += rhs
+        }
+    }
 
-impl From<u16> for ChunkIndex {
-	fn from(n: u16) -> Self {
-		ChunkIndex(n)
-	}
-}
+    /// A chunk of erasure-encoded block data. This target short lived EC content distribution (var len
+    /// data).
+    /// TODO @cheme in case the erasure chunk is from a data
+    /// is < MIN_CHUNCKED_DATA_SIZE then 3 options:
+    /// - pad original: sounds like a waste.
+    /// - split into subshards, but need var len subshards.
+    /// - pad to first n multiple of 4104 (padded page) or 4096 then use
+    /// same subshards for all pages, grouping all n subshards by n.
+    /// if is < 4096: then likely we just redundancy this to all validator. TODO @cheme
+    /// not that clear, generally should have a min size for this erasure chunk (the short lived one).
+    /// And at this min size we just distribute original content to everyone.
+    #[derive(PartialEq, Eq, Clone, Encode, Decode, Debug)]
+    pub struct ErasureChunk {
+        /// The encoded chunk of data belonging to either the original data of an ec encoded data.
+        pub chunk: Vec<u8>,
+    }
 
-impl AddAssign<u16> for ChunkIndex {
-	fn add_assign(&mut self, rhs: u16) {
-		self.0 += rhs
-	}
-}
+    #[derive(PartialEq, Eq, Clone, Encode, Decode, Debug)]
+    pub struct ErasureChunkWithProof {
+        /// The encoded chunk of data belonging to either the original data of an ec encoded data.
+        pub chunk: ErasureChunk,
+        /// The index of this chunk of data.
+        pub index: ChunkIndex,
+        /// Proof for this chunk against an erasure root.
+        pub proof: Proof,
+    }
 
-/// A chunk of erasure-encoded block data. This target short lived EC content distribution (var len
-/// data).
-/// TODO @cheme in case the erasure chunk is from a data
-/// is < MIN_CHUNCKED_DATA_SIZE then 3 options:
-/// - pad original: sounds like a waste.
-/// - split into subshards, but need var len subshards.
-/// - pad to first n multiple of 4104 (padded page) or 4096 then use
-/// same subshards for all pages, grouping all n subshards by n.
-/// if is < 4096: then likely we just redundancy this to all validator. TODO @cheme
-/// not that clear, generally should have a min size for this erasure chunk (the short lived one).
-/// And at this min size we just distribute original content to everyone.
-#[derive(PartialEq, Eq, Clone, Encode, Decode, Debug)]
-pub struct ErasureChunk {
-	/// The encoded chunk of data belonging to either the original data of an ec encoded data.
-	pub chunk: Vec<u8>,
-}
+    /// A small chunk of erasure-encoded block data. This target long lived EC content distribution
+    /// (fix segments sized).
+    /// The size of this chunk is a portion of the original content
+    /// length and var size.
+    #[derive(PartialEq, Eq, Clone, Encode, Decode, Debug)]
+    pub struct ErasureSubChunk {
+        /// The erasure-encoded chunk of data belonging to the candidate block.
+        pub chunk: [u8; SUBSHARD_SIZE],
+    }
 
-#[derive(PartialEq, Eq, Clone, Encode, Decode, Debug)]
-pub struct ErasureChunkWithProof {
-	/// The encoded chunk of data belonging to either the original data of an ec encoded data.
-	pub chunk: ErasureChunk,
-	/// The index of this chunk of data.
-	pub index: ChunkIndex,
-	/// Proof for this chunk against an erasure root.
-	pub proof: Proof,
-}
+    /// Subchunk being small they are usually batched.
+    #[derive(PartialEq, Eq, Clone, Encode, Decode, Debug)]
+    pub struct ErasureSubChunkBatch {
+        /// The erasure-encoded chunk of data belonging to the candidate block.
+        pub chunks: Vec<(ChunkIndex, ErasureSubChunk)>,
+    }
 
+    #[derive(PartialEq, Eq, Clone, Encode, Decode, Debug)]
+    pub struct Segment {
+        /// Fix size chunk of data.
+        pub data: Box<[u8; SEGMENT_SIZE]>,
+        /// The index of this segment against its full data.
+        pub index: u32,
+    }
 
-/// A small chunk of erasure-encoded block data. This target long lived EC content distribution
-/// (fix segments sized).
-/// The size of this chunk is a portion of the original content
-/// length and var size.
-#[derive(PartialEq, Eq, Clone, Encode, Decode, Debug)]
-pub struct ErasureSubChunk {
-	/// The erasure-encoded chunk of data belonging to the candidate block.
-	pub chunk: [u8; SUBSHARD_SIZE],
-}
+    /// Construct erasure-coded chunks.
+    pub fn construct_chunks(data: &[u8]) -> Result<Vec<ErasureChunk>, Error> {
+        if data.is_empty() {
+            return Err(Error::BadPayload);
+        }
+        let original_data = make_original_chunks(data);
 
-/// Subchunk being small they are usually batched.
-#[derive(PartialEq, Eq, Clone, Encode, Decode, Debug)]
-pub struct ErasureSubChunkBatch {
-	/// The erasure-encoded chunk of data belonging to the candidate block.
-	pub chunks: Vec<(ChunkIndex, ErasureSubChunk)>,
-}
+        let recovery = reed_solomon::encode(
+            N_CHUNKS,
+            N_REDUNDANCY * N_CHUNKS,
+            original_data.iter().map(|c| &c.chunk),
+        )?;
 
-#[derive(PartialEq, Eq, Clone, Encode, Decode, Debug)]
-pub struct Segment {
-	/// Fix size chunk of data. 
-	pub data: Box<[u8; SEGMENT_SIZE]>,
-	/// The index of this segment against its full data.
-	pub index: u32,
-}
+        let mut result = original_data;
+        result.extend(recovery.into_iter().map(|chunk| ErasureChunk { chunk }));
 
-/// Construct erasure-coded chunks.
-pub fn construct_chunks(data: &[u8]) -> Result<Vec<ErasureChunk>, Error> {
-	if data.is_empty() {
-		return Err(Error::BadPayload);
-	}
-	let original_data = make_original_chunks(data);
+        Ok(result)
+    }
 
-	let recovery = reed_solomon::encode(N_CHUNKS, N_REDUNDANCY * N_CHUNKS, original_data.iter().map(|c| &c.chunk))?;
+    fn next_aligned(n: usize, alignment: usize) -> usize {
+        ((n + alignment - 1) / alignment) * alignment
+    }
 
-	let mut result = original_data;
-	result.extend(recovery.into_iter().map(|chunk| ErasureChunk { chunk }));
+    fn chunk_bytes(data_len: usize) -> usize {
+        let shards_min_len = data_len.div_ceil(N_CHUNKS);
+        next_aligned(shards_min_len, CHUNKS_ALIGNMENT)
+    }
 
-	Ok(result)
-}
+    // The reed-solomon library takes sharded data as input.
+    fn make_original_chunks(data: &[u8]) -> Vec<ErasureChunk> {
+        debug_assert!(!data.is_empty(), "data must be non-empty");
 
-fn next_aligned(n: usize, alignment: usize) -> usize {
-	((n + alignment - 1) / alignment) * alignment
-}
+        let chunk_bytes = chunk_bytes(data.len());
 
-fn chunk_bytes(data_len: usize) -> usize {
-	let shards_min_len = data_len.div_ceil(N_CHUNKS);
-	next_aligned(shards_min_len, CHUNKS_ALIGNMENT)
-}
+        let mut result = Vec::with_capacity(N_CHUNKS);
+        for chunk in data.chunks(chunk_bytes) {
+            let mut chunk = chunk.to_vec();
+            chunk.resize(chunk_bytes, 0);
+            result.push(ErasureChunk { chunk });
+        }
 
-// The reed-solomon library takes sharded data as input.
-fn make_original_chunks(data: &[u8]) -> Vec<ErasureChunk> {
-	debug_assert!(!data.is_empty(), "data must be non-empty");
+        result
+    }
 
-	let chunk_bytes = chunk_bytes(data.len());
+    /// Reconstruct the original data from a set of chunks.
+    /// Chunks must be sorted by index.
+    ///
+    /// Provide an iterator containing chunk data and the corresponding index.
+    /// The indices of the present chunks must be indicated. If too few chunks
+    /// are provided, recovery is not possible.
+    ///
+    /// Works only for 1..65536 chunks.
+    ///
+    /// Due to the internals of the erasure coding algorithm, the output might be
+    /// larger than the original data and padded with zeroes; passing `data_len`
+    /// allows to truncate the output to the original data size.
+    pub fn reconstruct<'a, I>(chunks: &'a I, data_len: usize) -> Result<Vec<u8>, Error>
+    where
+        &'a I: IntoIterator<Item = (ChunkIndex, &'a ErasureChunk)>,
+    {
+        let original = chunks
+            .into_iter()
+            .take(N_CHUNKS)
+            .map(|(i, v)| (i.0 as usize, &v.chunk));
+        let recovery = chunks
+            .into_iter()
+            .skip(N_CHUNKS)
+            .map(|(i, v)| (i.0 as usize - N_CHUNKS, &v.chunk));
 
-	let mut result = Vec::with_capacity(N_CHUNKS);
-	for chunk in data.chunks(chunk_bytes) {
-		let mut chunk = chunk.to_vec();
-		chunk.resize(chunk_bytes, 0);
-		result.push(ErasureChunk { chunk });
-	}
+        let mut recovered =
+            reed_solomon::decode(N_CHUNKS, N_REDUNDANCY * N_CHUNKS, original, recovery)?;
 
-	result
-}
+        let shard_bytes = chunk_bytes(data_len);
+        let mut bytes = Vec::with_capacity(shard_bytes * N_CHUNKS);
 
+        let mut original = chunks
+            .into_iter()
+            .take(N_CHUNKS)
+            .map(|(i, v)| (i.0 as usize, &v.chunk));
+        for i in 0..N_CHUNKS {
+            let chunk = recovered.get(&i).map(AsRef::as_ref).unwrap_or_else(|| {
+                let (j, v) = original
+                    .next()
+                    .expect("what is not recovered must be present; qed");
+                debug_assert_eq!(i, j); // input iterator Must be sorted.
+                v
+            });
+            bytes.extend_from_slice(chunk);
+        }
 
-/// Reconstruct the original data from a set of chunks.
-/// Chunks must be sorted by index.
-///
-/// Provide an iterator containing chunk data and the corresponding index.
-/// The indices of the present chunks must be indicated. If too few chunks
-/// are provided, recovery is not possible.
-///
-/// Works only for 1..65536 chunks.
-///
-/// Due to the internals of the erasure coding algorithm, the output might be
-/// larger than the original data and padded with zeroes; passing `data_len`
-/// allows to truncate the output to the original data size.
-pub fn reconstruct<'a, I>(chunks: &'a I, data_len: usize) -> Result<Vec<u8>, Error>
-where
-	&'a I: IntoIterator<Item = (ChunkIndex, &'a ErasureChunk)>,
-{
-	let original = chunks
-		.into_iter()
-		.take(N_CHUNKS)
-		.map(|(i, v)| (i.0 as usize, &v.chunk));
-	let recovery = chunks
-		.into_iter()
-		.skip(N_CHUNKS)
-		.map(|(i, v)| (i.0 as usize - N_CHUNKS, &v.chunk));
+        bytes.truncate(data_len);
 
-	let mut recovered =
-		reed_solomon::decode(N_CHUNKS, N_REDUNDANCY * N_CHUNKS, original, recovery)?;
+        Ok(bytes)
+    }
 
-	let shard_bytes = chunk_bytes(data_len);
-	let mut bytes = Vec::with_capacity(shard_bytes * N_CHUNKS);
+    /// Subchunk uses some temp memory, so these should be used multiple time instead of allocating.
+    /// These run on the smallest unpadded buffers (3 time the theoric smallest buffers).
+    pub struct SubChunkEncoder {
+        encoder: reed_solomon::ReedSolomonEncoder,
+        // TODO @cheme should be able to remove this buffer?
+        chunked_data: ChunkedData,
+    }
 
-	let mut original = chunks
-		.into_iter()
-		.take(N_CHUNKS)
-		.map(|(i, v)| (i.0 as usize, &v.chunk));
-	for i in 0..N_CHUNKS {
-		let chunk = recovered.get(&i).map(AsRef::as_ref).unwrap_or_else(|| {
-			let (j, v) = original.next().expect("what is not recovered must be present; qed");
-			debug_assert_eq!(i, j); // input iterator Must be sorted.
-			v
-		});
-		bytes.extend_from_slice(chunk);
-	}
+    impl SubChunkEncoder {
+        pub fn new() -> Result<Self, Error> {
+            Ok(Self {
+                encoder: reed_solomon::ReedSolomonEncoder::new(
+                    N_CHUNKS,
+                    N_REDUNDANCY * N_CHUNKS,
+                    CHUNKS_MIN_SHARD * SUBSHARD_BATCH_MUL,
+                )?,
+                chunked_data: ChunkedData::init_sized(CHUNKS_MIN_SHARD * SUBSHARD_BATCH_MUL),
+            })
+        }
 
-	bytes.truncate(data_len);
+        /// Construct erasure-coded chunks.
+        /// Segement input must be ordered by index and consecutive.
+        /// Data must be less than MAX_SUB_OPTIMAL_SIZE_DATA.
+        pub fn construct_chunks(
+            &mut self,
+            data: &[Segment],
+        ) -> Result<Vec<Box<[[u8; SUBSHARD_SIZE]; N_CHUNKS]>>, Error> {
+            if data.len() > SEGMENTS_PER_SUBSHARD_BATCH_OPTIMAL {
+                return Err(Error::BadPayload);
+            }
+            let mut next = 0;
+            for s in data.iter() {
+                if s.index != next {
+                    return Err(Error::BadPayload);
+                }
+                next += 1;
+            }
+            if data.len() % SEGMENT_SIZE != 0 {
+                return Err(Error::BadPayload);
+            }
 
-	Ok(bytes)
-}
+            let mut shards = &mut self.chunked_data.shards;
+            //	let mut shards = vec![[0u8; SHARD_BYTES]; N_SHARDS];
+            let mut shard_i = 0;
+            let mut shard_i_offset = 0;
+            let mut shard_a = 0;
+            let mut full_i = 0;
+            for original in data.iter().map(|s| &s.data) {
+                for point in (0..SEGMENT_SIZE / 2)
+                    .map(|i_p| (original[i_p * 2], original[i_p * 2 + 1]))
+                    .chain((0..(SEGMENT_SIZE_ALIGNED - SEGMENT_SIZE) / 2).map(|_| (0, 0)))
+                {
+                    //		println!("{}: {} {} {} {} {}", i_p, number_shards_batch, original.len(), SHARD_BATCH_SIZE * number_shards_batch, shard_a, original.len()/2);
+                    //				println!("{:?}", (i_p, original.len() / 2));
+                    shards[shard_a][shard_i_offset + shard_i] = point.0;
+                    shards[shard_a][shard_i_offset + 32 + shard_i] = point.1;
+                    shard_a += 1;
+                    if shard_a % N_CHUNKS == 0 {
+                        shard_i += 1;
+                        if shard_i == N_POINT_BATCH {
+                            shard_i = 0;
+                            full_i += 1;
+                            shard_i_offset = full_i * (N_POINT_BATCH * SIZE_POINT);
+                        }
+                        shard_a = 0;
+                    }
+                }
+                debug_assert_eq!(shard_a % N_CHUNKS, 0);
+            }
 
+            for shard in self.chunked_data.shards.iter() {
+                self.encoder.add_original_shard(&shard)?;
+            }
 
+            let enco_res = self.encoder.encode()?;
+            let r_shards = enco_res.recovery_iter().map(|s| s.to_vec()).collect();
+            let (r_shards1, r_shards2) = super::build_rec(r_shards);
+            // TODO buf those dist??
+            let o_dist = self.chunked_data.to_dist();
+            let r_dist1 = r_shards1.to_dist();
+            let r_dist2 = r_shards2.to_dist();
+            assert_eq!(
+                o_dist.shards[0].len(),
+                SEGMENTS_PER_SUBSHARD_BATCH_OPTIMAL * 64
+            ); // TODO @cheme change o_dist type to 16 point fix
+            let mut result = vec![
+                Box::new([[0u8; SUBSHARD_SIZE]; N_CHUNKS]);
+                SEGMENTS_PER_SUBSHARD_BATCH_OPTIMAL
+            ];
+            for i in 0..SEGMENTS_PER_SUBSHARD_BATCH_OPTIMAL {
+							for j in 0..N_CHUNKS {
+								result[i][j] = o_dist.shards[j][i];
+								result[i][j + N_CHUNKS] = r_dist1.shards[j][i];
+								result[i][j + (N_CHUNKS * 2)] = r_dist2.shards[j][i];
+							}
+						}
+						return Ok(result);
+        }
+    }
 }
