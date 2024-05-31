@@ -15,6 +15,9 @@ const SHARD_BYTES: usize = 64;
 // MAIN
 
 fn main() {
+    for count in [1, 2, 4, 5, 10, 16] {
+        ec::test_sc(count);
+    }
     for count in [1, 2, 4, 5, 10, 16, 32, 50] {
         scenarii(count);
     }
@@ -1287,7 +1290,7 @@ mod ec {
                     N_REDUNDANCY * N_CHUNKS,
                     CHUNKS_MIN_SHARD * SUBSHARD_BATCH_MUL,
                 )?,
-                chunked_data: ChunkedData::init_sized(CHUNKS_MIN_SHARD * SUBSHARD_BATCH_MUL),
+                chunked_data: ChunkedData::init_sized(SUBSHARD_BATCH_MUL),
             })
         }
 
@@ -1297,7 +1300,7 @@ mod ec {
         pub fn construct_chunks(
             &mut self,
             data: &[Segment],
-        ) -> Result<Vec<Box<[[u8; SUBSHARD_SIZE]; N_CHUNKS]>>, Error> {
+        ) -> Result<Vec<Box<[[u8; SUBSHARD_SIZE]; N_CHUNKS * 3]>>, Error> {
             if data.len() > SEGMENTS_PER_SUBSHARD_BATCH_OPTIMAL {
                 return Err(Error::BadPayload);
             }
@@ -1308,9 +1311,11 @@ mod ec {
                 }
                 next += 1;
             }
+            /*
             if data.len() % SEGMENT_SIZE != 0 {
                 return Err(Error::BadPayload);
             }
+                        */
 
             let mut shards = &mut self.chunked_data.shards;
             //	let mut shards = vec![[0u8; SHARD_BYTES]; N_SHARDS];
@@ -1352,12 +1357,9 @@ mod ec {
             let o_dist = self.chunked_data.to_dist();
             let r_dist1 = r_shards1.to_dist();
             let r_dist2 = r_shards2.to_dist();
-            assert_eq!(
-                o_dist.shards[0].len(),
-                SEGMENTS_PER_SUBSHARD_BATCH_OPTIMAL * 64
-            ); // TODO @cheme change o_dist type to 16 point fix
+            assert_eq!(o_dist.shards[0].len(), SEGMENTS_PER_SUBSHARD_BATCH_OPTIMAL); // TODO @cheme change o_dist type to 16 point fix
             let mut result = vec![
-                Box::new([[0u8; SUBSHARD_SIZE]; N_CHUNKS]);
+                Box::new([[0u8; SUBSHARD_SIZE]; N_CHUNKS * 3]);
                 SEGMENTS_PER_SUBSHARD_BATCH_OPTIMAL
             ];
             for i in 0..SEGMENTS_PER_SUBSHARD_BATCH_OPTIMAL {
@@ -1387,9 +1389,9 @@ mod ec {
         }
 
         // u8 is the segment number.
-        pub fn reconstruct<'a, I>(&mut self, chunks: &'a I) -> Result<Vec<(u8, Segment)>, Error>
+        pub fn reconstruct<'a, I>(&mut self, chunks: &'a mut I) -> Result<Vec<(u8, Segment)>, Error>
         where
-            &'a I: IntoIterator<Item = (u8, ChunkIndex, &'a [u8; SUBSHARD_SIZE])>,
+            I: Iterator<Item = (u8, ChunkIndex, &'a [u8; SUBSHARD_SIZE])>,
         {
             use super::DistData;
             let mut o_dist_test = DistData::new(SEGMENTS_PER_SUBSHARD_BATCH_OPTIMAL * 12);
@@ -1398,7 +1400,7 @@ mod ec {
             let mut nb_chunk = 0; // support a single seg index first.
             let mut map_chunk: [(BTreeMap<usize, ()>, BTreeMap<usize, ()>);
                 SEGMENTS_PER_SUBSHARD_BATCH_OPTIMAL] = Default::default();
-            for (segment, chunk_index, chunk) in chunks.into_iter() {
+            for (segment, chunk_index, chunk) in chunks {
                 let chunk_index = chunk_index.0 as usize;
                 let segment = segment as usize;
                 if chunk_index < N_CHUNKS {
@@ -1470,5 +1472,45 @@ mod ec {
             }
             Ok(result)
         }
+    }
+
+    pub fn test_sc(nb_seg: usize) {
+        use rand::{rngs::SmallRng, seq::SliceRandom, Rng, SeedableRng};
+        let mut rng = SmallRng::from_seed([0; 32]);
+        let segments: Vec<_> = (0..nb_seg)
+            .map(|s| {
+                let mut se = [0u8; SEGMENT_SIZE];
+                rng.fill::<_>(&mut se[..]);
+
+                Segment {
+                    data: Box::new(se),
+                    index: s as u32,
+                }
+            })
+            .collect();
+
+        let mut encoder = SubChunkEncoder::new().unwrap();
+        let mut decoder = SubChunkDecoder::new().unwrap();
+        let chunks = encoder.construct_chunks(&segments).unwrap();
+        let i_seg = nb_seg / 2;
+
+        let mut it = (&chunks[i_seg][0..N_CHUNKS / 3])
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (i_seg as u8, ChunkIndex(i as u16), c))
+            .chain(
+                (&chunks[i_seg][N_CHUNKS..N_CHUNKS + N_CHUNKS / 3])
+                    .iter()
+                    .enumerate()
+                    .map(|(i, c)| (i_seg as u8, ChunkIndex(i as u16 + N_CHUNKS as u16), c)),
+            )
+            .chain(
+                (&chunks[i_seg][N_CHUNKS * 2..N_CHUNKS * 2 + N_CHUNKS / 3])
+                    .iter()
+                    .enumerate()
+                    .map(|(i, c)| (i_seg as u8, ChunkIndex(i as u16 + N_CHUNKS as u16 * 2), c)),
+            );
+        let s = decoder.reconstruct(&mut it).unwrap();
+        assert_eq!((i_seg as u8, segments[i_seg].clone()), s[0]);
     }
 }
