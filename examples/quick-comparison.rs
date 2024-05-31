@@ -1348,7 +1348,7 @@ mod ec {
             let enco_res = self.encoder.encode()?;
             let r_shards = enco_res.recovery_iter().map(|s| s.to_vec()).collect();
             let (r_shards1, r_shards2) = super::build_rec(r_shards);
-            // TODO buf those dist??
+            // TODO rem those dist, directly result TODO buff res?
             let o_dist = self.chunked_data.to_dist();
             let r_dist1 = r_shards1.to_dist();
             let r_dist2 = r_shards2.to_dist();
@@ -1361,13 +1361,114 @@ mod ec {
                 SEGMENTS_PER_SUBSHARD_BATCH_OPTIMAL
             ];
             for i in 0..SEGMENTS_PER_SUBSHARD_BATCH_OPTIMAL {
-							for j in 0..N_CHUNKS {
-								result[i][j] = o_dist.shards[j][i];
-								result[i][j + N_CHUNKS] = r_dist1.shards[j][i];
-								result[i][j + (N_CHUNKS * 2)] = r_dist2.shards[j][i];
-							}
-						}
-						return Ok(result);
+                for j in 0..N_CHUNKS {
+                    result[i][j] = o_dist.shards[j][i];
+                    result[i][j + N_CHUNKS] = r_dist1.shards[j][i];
+                    result[i][j + (N_CHUNKS * 2)] = r_dist2.shards[j][i];
+                }
+            }
+            return Ok(result);
+        }
+    }
+
+    pub struct SubChunkDecoder {
+        decoder: reed_solomon::ReedSolomonDecoder,
+    }
+
+    impl SubChunkDecoder {
+        pub fn new() -> Result<Self, Error> {
+            Ok(Self {
+                decoder: reed_solomon::ReedSolomonDecoder::new(
+                    N_CHUNKS,
+                    N_REDUNDANCY * N_CHUNKS,
+                    CHUNKS_MIN_SHARD * SUBSHARD_BATCH_MUL,
+                )?,
+            })
+        }
+
+        // u8 is the segment number.
+        pub fn reconstruct<'a, I>(&mut self, chunks: &'a I) -> Result<Vec<(u8, Segment)>, Error>
+        where
+            &'a I: IntoIterator<Item = (u8, ChunkIndex, &'a [u8; SUBSHARD_SIZE])>,
+        {
+            use super::DistData;
+            let mut o_dist_test = DistData::new(SEGMENTS_PER_SUBSHARD_BATCH_OPTIMAL * 12);
+            let mut r_dist_test1 = DistData::new(SEGMENTS_PER_SUBSHARD_BATCH_OPTIMAL * 12);
+            let mut r_dist_test2 = DistData::new(SEGMENTS_PER_SUBSHARD_BATCH_OPTIMAL * 12);
+            let mut nb_chunk = 0; // support a single seg index first.
+            let mut map_chunk: [(BTreeMap<usize, ()>, BTreeMap<usize, ()>);
+                SEGMENTS_PER_SUBSHARD_BATCH_OPTIMAL] = Default::default();
+            for (segment, chunk_index, chunk) in chunks.into_iter() {
+                let chunk_index = chunk_index.0 as usize;
+                let segment = segment as usize;
+                if chunk_index < N_CHUNKS {
+                    map_chunk[segment].0.insert(chunk_index, ());
+                    o_dist_test.shards[chunk_index][segment] = *chunk;
+                } else if chunk_index < 2 * N_CHUNKS {
+                    r_dist_test1.shards[chunk_index - N_CHUNKS][segment] = *chunk;
+                    map_chunk[segment].1.insert(chunk_index - N_CHUNKS, ());
+                } else {
+                    debug_assert!(chunk_index < 3 * N_CHUNKS);
+                    r_dist_test2.shards[chunk_index - (2 * N_CHUNKS)][segment] = *chunk;
+                    map_chunk[segment].1.insert(chunk_index - N_CHUNKS, ());
+                }
+            }
+            /*
+            for s in map_chunk {
+                // TODO this is for single segment we should have
+                // matching segment and process them at once.
+                // TODO would make sense to have longer iter.
+                assert_eq!(map_chunk.0.len() + map_chunk.1.len() == 342);
+            }
+                        */
+            let o_shards_test = o_dist_test.to_chunked();
+            let r_shards_test1 = r_dist_test1.to_chunked();
+            let r_shards_test2 = r_dist_test2.to_chunked();
+
+            let mut result = Vec::new();
+            for (segment, map_chunk) in map_chunk.iter().enumerate() {
+                // TODO this is for single segment we should have
+                // matching segment and process them at once.
+                // TODO would make sense to have longer iter.
+                let mut ori_map: std::collections::BTreeMap<usize, Vec<u8>> = Default::default();
+                if map_chunk.0.len() + map_chunk.1.len() >= N_CHUNKS {
+                    for i in map_chunk.0.keys() {
+                        let i = *i as usize;
+                        self.decoder.add_original_shard(i, &o_shards_test.shards[i]);
+                        ori_map.insert(i, o_shards_test.shards[i].clone());
+                    }
+                    for i in map_chunk.1.keys() {
+                        let i = *i as usize;
+                        if i >= N_CHUNKS {
+                            self.decoder
+                                .add_recovery_shard(i, &r_shards_test2.shards[i - N_CHUNKS]);
+                        } else {
+                            self.decoder
+                                .add_recovery_shard(i, &r_shards_test1.shards[i]);
+                        }
+                    }
+
+                    let ori_ret = self.decoder.decode()?;
+                    for (i, o) in ori_ret.restored_original_iter() {
+                        ori_map.insert(i, o.to_vec());
+                    }
+                    assert_eq!(ori_map.len(), N_CHUNKS);
+                    // TODO avoid instantiating this shards.
+                    let shards = ChunkedData::from_decode(ori_map);
+                    let chunk_start = segment * SEGMENT_SIZE_ALIGNED;
+                    // TODO direct copy on segment chunk
+                    let original =
+                        super::ori_chunk_to_data(&shards, chunk_start, Some(SEGMENT_SIZE));
+                    result.push((
+                        segment as u8,
+                        Segment {
+                            data: original.try_into().unwrap(),
+                            index: segment as u32,
+                        },
+                    ));
+                }
+            }
+            Ok(result)
         }
     }
 }
