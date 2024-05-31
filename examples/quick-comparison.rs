@@ -1218,6 +1218,7 @@ fn make_original_chunks(data: &[u8]) -> Vec<ErasureChunk> {
 
 
 /// Reconstruct the original data from a set of chunks.
+/// Chunks must be sorted by index.
 ///
 /// Provide an iterator containing chunk data and the corresponding index.
 /// The indices of the present chunks must be indicated. If too few chunks
@@ -1254,7 +1255,7 @@ where
 	for i in 0..N_CHUNKS {
 		let chunk = recovered.get(&i).map(AsRef::as_ref).unwrap_or_else(|| {
 			let (j, v) = original.next().expect("what is not recovered must be present; qed");
-			debug_assert_eq!(i, j);
+			debug_assert_eq!(i, j); // input iterator Must be sorted.
 			v
 		});
 		bytes.extend_from_slice(chunk);
