@@ -1417,17 +1417,6 @@ mod ec {
                     map_chunk[segment].1.insert(chunk_index - N_CHUNKS, ());
                 }
             }
-            /*
-            for s in map_chunk {
-                // TODO this is for single segment we should have
-                // matching segment and process them at once.
-                // TODO would make sense to have longer iter.
-                assert_eq!(map_chunk.0.len() + map_chunk.1.len() == 342);
-            }
-                        */
-            let o_shards_test = o_dist_test.to_chunked();
-            let r_shards_test1 = r_dist_test1.to_chunked();
-            let r_shards_test2 = r_dist_test2.to_chunked();
 
             let mut result = Vec::new();
             for (segment, map_chunk) in map_chunk.iter().enumerate() {
