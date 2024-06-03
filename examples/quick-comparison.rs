@@ -1386,13 +1386,10 @@ mod ec {
         {
             use super::DistData;
             let mut nb_chunk = 0; // support a single seg index first.
-            let mut ori = vec![BTreeMap::new(); 3 * N_CHUNKS];
-						let mut segments = BTreeSet::new();
+            let mut ori = vec![Vec::new(); 3 * N_CHUNKS];
+            let mut segments = BTreeSet::new();
             for (segment, chunk_index, chunk) in chunks {
-                ori[chunk_index.0 as usize].insert(segment, chunk);
-                let chunk_index = chunk_index.0 as usize;
-                let segment = segment as usize;
-								segments.insert(segment);
+                ori[chunk_index.0 as usize].push((segment, chunk));
             }
 
             let mut result = Vec::new();
@@ -1403,6 +1400,7 @@ mod ec {
                                                                                   // loop (any value
                     for (segment_i, chunk) in chunks {
                         let segment_i = *segment_i as usize;
+                        segments.insert(segment_i);
                         let shard_i_s = segment_i * 12 / 64;
                         let shard_i_r = segment_i * 12 % 64;
                         let mut shard_i = shard_i_s * 64 + shard_i_r / 2;
