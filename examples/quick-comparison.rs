@@ -1010,7 +1010,7 @@ mod ec {
     use super::ChunkedData;
     use reed_solomon_simd as reed_solomon;
     use scale::{Decode, Encode};
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::mem::MaybeUninit;
     use std::ops::AddAssign;
     use thiserror::Error;
@@ -1384,32 +1384,15 @@ mod ec {
         where
             I: Iterator<Item = (u8, ChunkIndex, &'a [u8; SUBSHARD_SIZE])>,
         {
-            /*
-            let mut shards2: [MaybeUninit<[u8; CHUNKS_MIN_SHARD * SUBSHARD_BATCH_MUL]>;
-                N_CHUNKS * (1 + N_REDUNDANCY)] = unsafe { MaybeUninit::uninit().assume_init() };
-            for i in 0..shards2.len() {
-                shards2[i].write([0; CHUNKS_MIN_SHARD * SUBSHARD_BATCH_MUL]);
-            }
-            let mut shards2: [[u8; CHUNKS_MIN_SHARD * SUBSHARD_BATCH_MUL];
-                N_CHUNKS * (1 + N_REDUNDANCY)] = unsafe { std::mem::transmute(shards2) };
-                    */
             use super::DistData;
             let mut nb_chunk = 0; // support a single seg index first.
             let mut ori = vec![BTreeMap::new(); 3 * N_CHUNKS];
-            let mut map_chunk: [(BTreeMap<usize, ()>, BTreeMap<usize, ()>);
-                SEGMENTS_PER_SUBSHARD_BATCH_OPTIMAL] = Default::default();
+						let mut segments = BTreeSet::new();
             for (segment, chunk_index, chunk) in chunks {
                 ori[chunk_index.0 as usize].insert(segment, chunk);
                 let chunk_index = chunk_index.0 as usize;
                 let segment = segment as usize;
-                if chunk_index < N_CHUNKS {
-                    map_chunk[segment].0.insert(chunk_index, ());
-                } else if chunk_index < 2 * N_CHUNKS {
-                    map_chunk[segment].1.insert(chunk_index - N_CHUNKS, ());
-                } else {
-                    debug_assert!(chunk_index < 3 * N_CHUNKS);
-                    map_chunk[segment].1.insert(chunk_index - N_CHUNKS, ());
-                }
+								segments.insert(segment);
             }
 
             let mut result = Vec::new();
@@ -1448,7 +1431,7 @@ mod ec {
             assert_eq!(ori_map.len(), N_CHUNKS);
             // TODO avoid instantiating this shards.
             let shards = ChunkedData::from_decode(ori_map);
-            for (segment, map_chunk) in map_chunk.iter().enumerate() {
+            for segment in segments {
                 let chunk_start = segment * SEGMENT_SIZE_ALIGNED;
                 // TODO direct copy on segment chunk
                 let original2 = super::ori_chunk_to_data(&shards, chunk_start, Some(SEGMENT_SIZE));
@@ -1501,6 +1484,6 @@ mod ec {
                     .map(|(i, c)| (i_seg as u8, ChunkIndex(i as u16 + N_CHUNKS as u16 * 2), c)),
             );
         let s = decoder.reconstruct(&mut it).unwrap();
-        assert_eq!((i_seg as u8, segments[i_seg].clone()), s[i_seg]);
+        assert_eq!((i_seg as u8, segments[i_seg].clone()), s[0]);
     }
 }
