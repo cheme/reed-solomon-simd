@@ -1385,61 +1385,105 @@ mod ec {
             I: Iterator<Item = (u8, ChunkIndex, &'a [u8; SUBSHARD_SIZE])>,
         {
             use super::DistData;
-            let mut nb_chunk = 0; // support a single seg index first.
             let mut ori = vec![Vec::new(); 3 * N_CHUNKS];
             let mut segments = BTreeSet::new();
+            let mut processed_segments = BTreeSet::new();
             for (segment, chunk_index, chunk) in chunks {
                 ori[chunk_index.0 as usize].push((segment, chunk));
+                segments.insert(segment);
             }
 
             let mut result = Vec::new();
-            let mut ori_map: std::collections::BTreeMap<usize, Vec<u8>> = Default::default();
-            for (chunk_ix, chunks) in ori.iter().enumerate() {
-                if chunks.len() > 0 {
-                    let mut shard = [0u8; SUBSHARD_BATCH_MUL * CHUNKS_MIN_SHARD]; // TODO test outside
-                                                                                  // loop (any value
-                    for (segment_i, chunk) in chunks {
-                        let segment_i = *segment_i as usize;
-                        segments.insert(segment_i);
-                        let shard_i_s = segment_i * 12 / 64;
-                        let shard_i_r = segment_i * 12 % 64;
-                        let mut shard_i = shard_i_s * 64 + shard_i_r / 2;
-                        for point_i in 0..SUBSHARD_POINTS {
-                            shard[shard_i] = chunk[point_i * 2];
-                            shard[shard_i + 32] = chunk[(point_i * 2) + 1];
-                            shard_i += 1;
-                            if shard_i % 32 == 0 {
-                                shard_i += 32;
+
+            let mut shard = [0u8; SUBSHARD_BATCH_MUL * CHUNKS_MIN_SHARD]; // TODO test outside
+                                                                          // loop (any value
+
+            let mut skip = 0;
+            for segment in segments {
+                let mut nb_chunk = 0;
+                let mut ori_map: std::collections::BTreeMap<usize, Vec<u8>> = Default::default();
+                let mut run_segments = BTreeMap::new();
+                for (chunk_ix, chunks) in ori.iter().enumerate().skip(skip) {
+                    if chunks.len() > 0 {
+                        let mut added = false;
+                        for (segment_i, chunk) in chunks {
+                            let segment_i = *segment_i as usize;
+                            if nb_chunk == 0 {
+                                if !processed_segments.contains(&segment_i) {
+                                    run_segments.insert(segment_i, 1);
+                                } else {
+                                    continue;
+                                }
+                            } else {
+                                if let Some(count) = run_segments.get_mut(&segment_i) {
+                                    if *count == nb_chunk {
+                                        *count += 1;
+                                    } else {
+                                        continue;
+                                    }
+                                } else {
+                                    continue;
+                                }
+                            }
+                            added = true;
+                            let shard_i_s = segment_i * 12 / 64;
+                            let shard_i_r = segment_i * 12 % 64;
+                            let mut shard_i = shard_i_s * 64 + shard_i_r / 2;
+                            for point_i in 0..SUBSHARD_POINTS {
+                                shard[shard_i] = chunk[point_i * 2];
+                                shard[shard_i + 32] = chunk[(point_i * 2) + 1];
+                                shard_i += 1;
+                                if shard_i % 32 == 0 {
+                                    shard_i += 32;
+                                }
                             }
                         }
-                    }
+                        if !added {
+                            continue;
+                        }
 
-                    if chunk_ix < N_CHUNKS {
-                        self.decoder.add_original_shard(chunk_ix, &shard);
-                        ori_map.insert(chunk_ix, shard.to_vec());
-                    } else {
-                        self.decoder.add_recovery_shard(chunk_ix - N_CHUNKS, &shard);
+                        if chunk_ix < N_CHUNKS {
+                            self.decoder.add_original_shard(chunk_ix, &shard)?;
+                            ori_map.insert(chunk_ix, shard.to_vec());
+                        } else {
+                            self.decoder
+                                .add_recovery_shard(chunk_ix - N_CHUNKS, &shard)?;
+                        }
+
+                        nb_chunk += 1;
+                        if nb_chunk == N_CHUNKS {
+                            break;
+                        }
                     }
                 }
-            }
-            let ori_ret = self.decoder.decode()?;
-            for (i, o) in ori_ret.restored_original_iter() {
-                ori_map.insert(i, o.to_vec());
-            }
-            assert_eq!(ori_map.len(), N_CHUNKS);
-            // TODO avoid instantiating this shards.
-            let shards = ChunkedData::from_decode(ori_map);
-            for segment in segments {
-                let chunk_start = segment * SEGMENT_SIZE_ALIGNED;
-                // TODO direct copy on segment chunk
-                let original2 = super::ori_chunk_to_data(&shards, chunk_start, Some(SEGMENT_SIZE));
-                result.push((
-                    segment as u8,
-                    Segment {
-                        data: original2.try_into().unwrap(),
-                        index: segment as u32,
-                    },
-                ));
+                if nb_chunk != N_CHUNKS {
+                    continue;
+                }
+                let ori_ret = self.decoder.decode()?;
+                for (i, o) in ori_ret.restored_original_iter() {
+                    ori_map.insert(i, o.to_vec());
+                }
+                assert_eq!(ori_map.len(), N_CHUNKS);
+                // TODO avoid instantiating this shards.
+                let shards = ChunkedData::from_decode(ori_map);
+                for segment in run_segments
+                    .iter()
+                    .filter(|v| *v.1 == N_CHUNKS)
+                    .map(|v| *v.0)
+                {
+                    let chunk_start = segment * SEGMENT_SIZE_ALIGNED;
+                    // TODO direct copy on segment chunk
+                    let original2 =
+                        super::ori_chunk_to_data(&shards, chunk_start, Some(SEGMENT_SIZE));
+                    result.push((
+                        segment as u8,
+                        Segment {
+                            data: original2.try_into().unwrap(),
+                            index: segment as u32,
+                        },
+                    ));
+                    processed_segments.insert(segment);
+                }
             }
             Ok(result)
         }
