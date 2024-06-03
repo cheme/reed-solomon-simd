@@ -1308,26 +1308,10 @@ mod ec {
                 }
                 next += 1;
             }
-            /*
-            if data.len() % SEGMENT_SIZE != 0 {
-                return Err(Error::BadPayload);
-            }
-                        */
             let mut result = vec![
                 Box::new([[0u8; SUBSHARD_SIZE]; N_CHUNKS * 3]);
                 SEGMENTS_PER_SUBSHARD_BATCH_OPTIMAL
             ];
-            let mut result2 = vec![
-                Box::new([[0u8; SUBSHARD_SIZE]; N_CHUNKS * 3]);
-                SEGMENTS_PER_SUBSHARD_BATCH_OPTIMAL
-            ];
-
-
-            //	let mut shards = vec![[0u8; SHARD_BYTES]; N_SHARDS];
-            let mut shard_i = 0;
-            let mut shard_i_offset = 0;
-            let mut shard_a = 0;
-            let mut full_i = 0;
 
             let mut shard = vec![0u8; SUBSHARD_BATCH_MUL * CHUNKS_MIN_SHARD];
             for shard_a in 0..N_CHUNKS {
@@ -1343,8 +1327,8 @@ mod ec {
                         } else {
                             (0, 0)
                         };
-												result[segment_i][shard_a][point_i * 2 ] = point.0;
-												result[segment_i][shard_a][point_i * 2 +1] = point.1;
+                        result[segment_i][shard_a][point_i * 2] = point.0;
+                        result[segment_i][shard_a][point_i * 2 + 1] = point.1;
                         shard[shard_i] = point.0;
                         shard[shard_i + 32] = point.1;
                         shard_i += 1;
@@ -1353,26 +1337,36 @@ mod ec {
                         }
                     }
                 }
-//								panic!("{:?}", shard);
                 self.encoder.add_original_shard(&shard)?;
             }
-            //for shard in self.chunked_data.shards.iter() {
-            //self.encoder.add_original_shard(&shard)?;
-            //}
 
             let enco_res = self.encoder.encode()?;
             let r_shards = enco_res.recovery_iter().map(|s| s.to_vec()).collect();
             let (r_shards1, r_shards2) = super::build_rec(r_shards);
-            // TODO rem those dist, directly result TODO buff res?
-            let r_dist1 = r_shards1.to_dist();
-            let r_dist2 = r_shards2.to_dist();
-            for i in 0..SEGMENTS_PER_SUBSHARD_BATCH_OPTIMAL {
-                for j in 0..N_CHUNKS {
-                    //result[i][j] = o_dist.shards[j][i];
-                    result[i][j + N_CHUNKS] = r_dist1.shards[j][i];
-                    result[i][j + (N_CHUNKS * 2)] = r_dist2.shards[j][i];
+            for (shard_a, data) in enco_res.recovery_iter().enumerate() {
+                let mut segment_i = 0;
+                let mut subchunk_i = 0;
+                let mut point_i = 0;
+                let mut data_i = 0;
+                loop {
+                    let point = (data[data_i], data[data_i + 32]);
+                    data_i += 1;
+                    if data_i % 32 == 0 {
+                        data_i += 32;
+                        if data_i == data.len() {
+                            break;
+                        }
+                    }
+                    result[segment_i][shard_a + N_CHUNKS][point_i * 2] = point.0;
+                    result[segment_i][shard_a + N_CHUNKS][point_i * 2 + 1] = point.1;
+                    point_i += 1;
+                    if point_i == 6 {
+                        point_i = 0;
+                        segment_i += 1;
+                    }
                 }
             }
+
             return Ok(result);
         }
     }
