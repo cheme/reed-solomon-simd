@@ -1,4 +1,4 @@
-use std::{mem::MaybeUninit, time::Instant};
+use std::{collections::BTreeMap, mem::MaybeUninit, time::Instant};
 
 use rand::{rngs::SmallRng, seq::SliceRandom, Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
@@ -18,9 +18,11 @@ fn main() {
     for count in [1, 2, 4, 5, 10, 16] {
         ec::test_sc(count);
     }
+    /*
     for count in [1, 2, 4, 5, 10, 16, 32, 50] {
         scenarii(count);
     }
+        */
     /*
     #[cfg(debug_assertions)]
     {
@@ -554,9 +556,10 @@ fn data_to_dist(data: &[u8]) -> Vec<Vec<(u8, u8)>> {
     res
 }
 
-fn ori_chunk_to_data(chunks: &ChunkedData, start_data: usize, data_len: Option<usize>) -> Vec<u8> {
+fn ori_chunk_to_data3(chunks: &ChunkedData, start_data: usize, data_len: Option<usize>) -> Vec<u8> {
     let mut data = Vec::new(); // TODO capacity.
     let n_full = chunks.n_full();
+    panic!("dd");
     println!("spb{}", n_full * 64);
 
     let shards = &chunks.shards;
@@ -590,13 +593,54 @@ fn ori_chunk_to_data(chunks: &ChunkedData, start_data: usize, data_len: Option<u
     }
     data
 }
+fn ori_chunk_to_data(
+    shards: &BTreeMap<usize, Vec<u8>>,
+    start_data: usize,
+    data_len: Option<usize>,
+) -> Option<[u8; 4096]> {
+    let mut data = [0u8; 4096];
+
+    let mut i_data = 0;
+    let mut shard_i = 0;
+    let mut shard_a = 0;
+    let mut full_i = 0;
+    let (mut full_i, mut shard_i, mut shard_a) = data_index_to_chunk_index(start_data);
+    let mut shard_i_offset = full_i * (N_POINT_BATCH * POINT_SIZE);
+    loop {
+        let Some(s) = shards.get(&shard_a) else {
+            return None;
+        };
+        let l = s[shard_i_offset + shard_i];
+        data[i_data] = l;
+        i_data += 1;
+        let r = s[shard_i_offset + shard_i + 32];
+        data[i_data] = r;
+        i_data += 1;
+        if data_len.map(|m| i_data >= m).unwrap_or(false) {
+            break;
+        }
+        shard_a += 1;
+        if shard_a % N_SHARDS == 0 {
+            shard_i += 1;
+            if shard_i == N_POINT_BATCH {
+                shard_i = 0;
+                full_i += 1;
+                if full_i == 3 {
+                    break;
+                }
+
+                shard_i_offset = full_i * (N_POINT_BATCH * POINT_SIZE);
+            }
+            shard_a = 0;
+        }
+    }
+    Some(data)
+}
 
 // return chunk index among N_SHARDS (group of n , ix in slice, ix in n)
 fn data_index_to_chunk_index(index: usize) -> (usize, usize, usize) {
-    println!("x{:?}", index);
     let a = index % SHARD_BATCH_SIZE;
     let b = a % (N_SHARDS * POINT_SIZE);
-    println!("x{:?}", b / N_SHARDS);
     (
         index / SHARD_BATCH_SIZE,
         a / (N_SHARDS * POINT_SIZE),
@@ -762,12 +806,12 @@ fn scenarii(data_chunks: usize) {
     assert_eq!(o_shards.shards[0].len(), o_shards2.shards[0].len());
     assert_eq!(o_shards.shards[0], o_shards2.shards[0]);
     assert_eq!(o_shards, o_shards2);
-    let original2 = ori_chunk_to_data(&o_shards, 0, None);
+    let original2 = ori_chunk_to_data3(&o_shards, 0, None);
     assert_eq!(original[0..original.len()], original2[0..original.len()]);
     let a = original.len() * 3 / 4;
     println!("a{:?} - {:?}", a, original.len());
-    let original3 = ori_chunk_to_data(&o_shards, a, None);
-    let original4 = ori_chunk_to_data(&o_shards, a, Some(10));
+    let original3 = ori_chunk_to_data3(&o_shards, a, None);
+    let original4 = ori_chunk_to_data3(&o_shards, a, Some(10));
     assert_eq!(original[a..], original3[0..original.len() * 1 / 4]);
     assert_eq!(original[a..a + 10], original4[0..10]);
     let r_shards =
@@ -822,7 +866,7 @@ fn scenarii(data_chunks: usize) {
     assert_eq!(ori_map.len(), N_SHARDS);
     // TODO avoid instantiating this shards.
     let shards = ChunkedData::from_decode(ori_map);
-    let ori_test = ori_chunk_to_data(&shards, chunk_start, Some(SEGMENT_SIZE_PADDED));
+    let ori_test = ori_chunk_to_data3(&shards, chunk_start, Some(SEGMENT_SIZE_PADDED));
     assert_eq!(original[chunk_start..chunk_end], ori_test);
 
     // from first half red
@@ -852,7 +896,7 @@ fn scenarii(data_chunks: usize) {
     assert_eq!(ori_map.len(), N_SHARDS);
     // TODO avoid instantiating this shards.
     let shards = ChunkedData::from_decode(ori_map);
-    let ori_test = ori_chunk_to_data(&shards, chunk_start, Some(SEGMENT_SIZE_PADDED));
+    let ori_test = ori_chunk_to_data3(&shards, chunk_start, Some(SEGMENT_SIZE_PADDED));
     assert_eq!(original[chunk_start..chunk_end], ori_test);
 
     // from second half red
@@ -886,7 +930,7 @@ fn scenarii(data_chunks: usize) {
     assert_eq!(ori_map.len(), N_SHARDS);
     // TODO avoid instantiating this shards.
     let shards = ChunkedData::from_decode(ori_map);
-    let ori_test = ori_chunk_to_data(&shards, chunk_start, Some(SEGMENT_SIZE_PADDED));
+    let ori_test = ori_chunk_to_data3(&shards, chunk_start, Some(SEGMENT_SIZE_PADDED));
     assert_eq!(original[chunk_start..chunk_end], ori_test);
 
     // from 33% mix
@@ -939,7 +983,7 @@ fn scenarii(data_chunks: usize) {
     assert_eq!(ori_map.len(), N_SHARDS);
     // TODO avoid instantiating this shards.
     let shards = ChunkedData::from_decode(ori_map);
-    let ori_test = ori_chunk_to_data(&shards, chunk_start, Some(SEGMENT_SIZE_PADDED));
+    let ori_test = ori_chunk_to_data3(&shards, chunk_start, Some(SEGMENT_SIZE_PADDED));
     assert_eq!(original[chunk_start..chunk_end], ori_test);
 
     /*
@@ -1387,6 +1431,8 @@ mod ec {
             use super::DistData;
             let mut ori = vec![Vec::new(); 3 * N_CHUNKS];
             let mut segments = BTreeSet::new();
+            // TODO processed and run_segments could be skiped if we are sure to get
+            // correct number of chunks all for the same given chunk ix and segments
             let mut processed_segments = BTreeSet::new();
             for (segment, chunk_index, chunk) in chunks {
                 ori[chunk_index.0 as usize].push((segment, chunk));
@@ -1463,22 +1509,20 @@ mod ec {
                 for (i, o) in ori_ret.restored_original_iter() {
                     ori_map.insert(i, o.to_vec());
                 }
-                assert_eq!(ori_map.len(), N_CHUNKS);
-                // TODO avoid instantiating this shards.
-                let shards = ChunkedData::from_decode(ori_map);
+                debug_assert_eq!(ori_map.len(), N_CHUNKS);
                 for segment in run_segments
                     .iter()
                     .filter(|v| *v.1 == N_CHUNKS)
                     .map(|v| *v.0)
                 {
                     let chunk_start = segment * SEGMENT_SIZE_ALIGNED;
-                    // TODO direct copy on segment chunk
-                    let original2 =
-                        super::ori_chunk_to_data(&shards, chunk_start, Some(SEGMENT_SIZE));
+                    let original =
+                        super::ori_chunk_to_data(&ori_map, chunk_start, Some(SEGMENT_SIZE))
+                            .expect("number of segments checked");
                     result.push((
                         segment as u8,
                         Segment {
-                            data: original2.try_into().unwrap(),
+                            data: Box::new(original),
                             index: segment as u32,
                         },
                     ));
