@@ -1278,8 +1278,6 @@ mod ec {
     /// These run on the smallest unpadded buffers (3 time the theoric smallest buffers).
     pub struct SubChunkEncoder {
         encoder: reed_solomon::ReedSolomonEncoder,
-        // TODO @cheme should be able to remove this buffer?
-        chunked_data: ChunkedData,
     }
 
     impl SubChunkEncoder {
@@ -1290,7 +1288,6 @@ mod ec {
                     N_REDUNDANCY * N_CHUNKS,
                     CHUNKS_MIN_SHARD * SUBSHARD_BATCH_MUL,
                 )?,
-                chunked_data: ChunkedData::init_sized(SUBSHARD_BATCH_MUL),
             })
         }
 
@@ -1316,55 +1313,62 @@ mod ec {
                 return Err(Error::BadPayload);
             }
                         */
+            let mut result = vec![
+                Box::new([[0u8; SUBSHARD_SIZE]; N_CHUNKS * 3]);
+                SEGMENTS_PER_SUBSHARD_BATCH_OPTIMAL
+            ];
+            let mut result2 = vec![
+                Box::new([[0u8; SUBSHARD_SIZE]; N_CHUNKS * 3]);
+                SEGMENTS_PER_SUBSHARD_BATCH_OPTIMAL
+            ];
 
-            let mut shards = &mut self.chunked_data.shards;
+
             //	let mut shards = vec![[0u8; SHARD_BYTES]; N_SHARDS];
             let mut shard_i = 0;
             let mut shard_i_offset = 0;
             let mut shard_a = 0;
             let mut full_i = 0;
-            for original in data.iter().map(|s| &s.data) {
-                for point in (0..SEGMENT_SIZE / 2)
-                    .map(|i_p| (original[i_p * 2], original[i_p * 2 + 1]))
-                    .chain((0..(SEGMENT_SIZE_ALIGNED - SEGMENT_SIZE) / 2).map(|_| (0, 0)))
-                {
-                    //		println!("{}: {} {} {} {} {}", i_p, number_shards_batch, original.len(), SHARD_BATCH_SIZE * number_shards_batch, shard_a, original.len()/2);
-                    //				println!("{:?}", (i_p, original.len() / 2));
-                    shards[shard_a][shard_i_offset + shard_i] = point.0;
-                    shards[shard_a][shard_i_offset + 32 + shard_i] = point.1;
-                    shard_a += 1;
-                    if shard_a % N_CHUNKS == 0 {
+
+            let mut shard = vec![0u8; SUBSHARD_BATCH_MUL * CHUNKS_MIN_SHARD];
+            for shard_a in 0..N_CHUNKS {
+                let mut shard_i = 0;
+                for segment_i in 0..data.len() {
+                    for point_i in 0..SUBSHARD_POINTS {
+                        let data_i = (point_i * N_CHUNKS) * 2 + shard_a * 2;
+                        let point = if data_i < SEGMENT_SIZE {
+                            (
+                                data[segment_i].data[data_i],
+                                data[segment_i].data[data_i + 1],
+                            )
+                        } else {
+                            (0, 0)
+                        };
+												result[segment_i][shard_a][point_i * 2 ] = point.0;
+												result[segment_i][shard_a][point_i * 2 +1] = point.1;
+                        shard[shard_i] = point.0;
+                        shard[shard_i + 32] = point.1;
                         shard_i += 1;
-                        if shard_i == N_POINT_BATCH {
-                            shard_i = 0;
-                            full_i += 1;
-                            shard_i_offset = full_i * (N_POINT_BATCH * SIZE_POINT);
+                        if shard_i % 32 == 0 {
+                            shard_i += 32;
                         }
-                        shard_a = 0;
                     }
                 }
-                debug_assert_eq!(shard_a % N_CHUNKS, 0);
-            }
-
-            for shard in self.chunked_data.shards.iter() {
+//								panic!("{:?}", shard);
                 self.encoder.add_original_shard(&shard)?;
             }
+            //for shard in self.chunked_data.shards.iter() {
+            //self.encoder.add_original_shard(&shard)?;
+            //}
 
             let enco_res = self.encoder.encode()?;
             let r_shards = enco_res.recovery_iter().map(|s| s.to_vec()).collect();
             let (r_shards1, r_shards2) = super::build_rec(r_shards);
             // TODO rem those dist, directly result TODO buff res?
-            let o_dist = self.chunked_data.to_dist();
             let r_dist1 = r_shards1.to_dist();
             let r_dist2 = r_shards2.to_dist();
-            assert_eq!(o_dist.shards[0].len(), SEGMENTS_PER_SUBSHARD_BATCH_OPTIMAL); // TODO @cheme change o_dist type to 16 point fix
-            let mut result = vec![
-                Box::new([[0u8; SUBSHARD_SIZE]; N_CHUNKS * 3]);
-                SEGMENTS_PER_SUBSHARD_BATCH_OPTIMAL
-            ];
             for i in 0..SEGMENTS_PER_SUBSHARD_BATCH_OPTIMAL {
                 for j in 0..N_CHUNKS {
-                    result[i][j] = o_dist.shards[j][i];
+                    //result[i][j] = o_dist.shards[j][i];
                     result[i][j + N_CHUNKS] = r_dist1.shards[j][i];
                     result[i][j + (N_CHUNKS * 2)] = r_dist2.shards[j][i];
                 }
