@@ -1327,10 +1327,10 @@ mod ec {
                         } else {
                             (0, 0)
                         };
-                        result[segment_i][shard_a][point_i * 2] = point.0;
-                        result[segment_i][shard_a][point_i * 2 + 1] = point.1;
                         shard[shard_i] = point.0;
                         shard[shard_i + 32] = point.1;
+                        result[segment_i][shard_a][point_i * 2] = point.0;
+                        result[segment_i][shard_a][point_i * 2 + 1] = point.1;
                         shard_i += 1;
                         if shard_i % 32 == 0 {
                             shard_i += 32;
@@ -1345,28 +1345,20 @@ mod ec {
             let (r_shards1, r_shards2) = super::build_rec(r_shards);
             for (shard_a, data) in enco_res.recovery_iter().enumerate() {
                 let mut segment_i = 0;
-                let mut subchunk_i = 0;
-                let mut point_i = 0;
                 let mut data_i = 0;
-                loop {
-                    let point = (data[data_i], data[data_i + 32]);
-                    data_i += 1;
-                    if data_i % 32 == 0 {
-                        data_i += 32;
-                        if data_i == data.len() {
-                            break;
+                while data_i != data.len() {
+                    for point_i in 0..SUBSHARD_POINTS {
+                        let point = (data[data_i], data[data_i + 32]);
+                        data_i += 1;
+                        if data_i % 32 == 0 {
+                            data_i += 32;
                         }
+                        result[segment_i][shard_a + N_CHUNKS][point_i * 2] = point.0;
+                        result[segment_i][shard_a + N_CHUNKS][point_i * 2 + 1] = point.1;
                     }
-                    result[segment_i][shard_a + N_CHUNKS][point_i * 2] = point.0;
-                    result[segment_i][shard_a + N_CHUNKS][point_i * 2 + 1] = point.1;
-                    point_i += 1;
-                    if point_i == 6 {
-                        point_i = 0;
-                        segment_i += 1;
-                    }
+                    segment_i += 1;
                 }
             }
-
             return Ok(result);
         }
     }
