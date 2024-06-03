@@ -1394,9 +1394,6 @@ mod ec {
                 N_CHUNKS * (1 + N_REDUNDANCY)] = unsafe { std::mem::transmute(shards2) };
                     */
             use super::DistData;
-            let mut o_dist_test = DistData::new(SEGMENTS_PER_SUBSHARD_BATCH_OPTIMAL * 12);
-            let mut r_dist_test1 = DistData::new(SEGMENTS_PER_SUBSHARD_BATCH_OPTIMAL * 12);
-            let mut r_dist_test2 = DistData::new(SEGMENTS_PER_SUBSHARD_BATCH_OPTIMAL * 12);
             let mut nb_chunk = 0; // support a single seg index first.
             let mut ori = vec![BTreeMap::new(); 3 * N_CHUNKS];
             let mut map_chunk: [(BTreeMap<usize, ()>, BTreeMap<usize, ()>);
@@ -1406,14 +1403,11 @@ mod ec {
                 let chunk_index = chunk_index.0 as usize;
                 let segment = segment as usize;
                 if chunk_index < N_CHUNKS {
-                    o_dist_test.shards[chunk_index][segment] = *chunk;
                     map_chunk[segment].0.insert(chunk_index, ());
                 } else if chunk_index < 2 * N_CHUNKS {
-                    r_dist_test1.shards[chunk_index - N_CHUNKS][segment] = *chunk;
                     map_chunk[segment].1.insert(chunk_index - N_CHUNKS, ());
                 } else {
                     debug_assert!(chunk_index < 3 * N_CHUNKS);
-                    r_dist_test2.shards[chunk_index - (2 * N_CHUNKS)][segment] = *chunk;
                     map_chunk[segment].1.insert(chunk_index - N_CHUNKS, ());
                 }
             }
